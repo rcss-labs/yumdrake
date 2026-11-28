@@ -84,7 +84,9 @@ jobs:
 
   floci:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # make test-floci (up to 10 minutes) and then the end-to-end tests with real
+    # deployments (up to 30 minutes; they roll services in Floci containers).
+    timeout-minutes: 50
     # Same services and image tags as the integration job (make test-floci also
     # runs the integration tests).
     services:
@@ -125,7 +127,7 @@ jobs:
       - name: Start Floci
         run: docker compose up -d --wait floci
       - run: make test-floci
-      # The end-to-end planning tests against Floci; the endpoint on the command line enables them.
+      # The end-to-end planning and deployment tests against Floci; the endpoint on the command line enables them.
       - run: make test-e2e YUMDRAKE_TEST_AWS_ENDPOINT=http://localhost:4577
       - name: Show Floci logs on failure
         if: failure()

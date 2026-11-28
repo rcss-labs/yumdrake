@@ -227,7 +227,7 @@ make smoke              # builds the images and starts the Compose "app" profile
 
 ## Trying a run with fake steps
 
-Resolving and revalidating are real; with fake steps only `copy-config` and `ecs-deploy` pretend, so a dev run still needs AWS access (Floci works), a GitHub connection for the config owner and `YUMDRAKE_ARTIFACT_BUCKET`. Start the runner with both of these (it refuses `YUMDRAKE_FAKE_STEPS=true` in any other environment, and production defaults keep them off):
+The runner runs the real `copy-config` and `ecs-deploy` steps; with fake steps only those two pretend. Resolving and revalidating are real either way, so a dev run still needs AWS access (Floci works), a GitHub connection for the config owner and `YUMDRAKE_ARTIFACT_BUCKET`. Start the runner with both of these (it refuses `YUMDRAKE_FAKE_STEPS=true` in any other environment, and production defaults keep them off):
 
 ```sh
 YUMDRAKE_ENV=dev YUMDRAKE_FAKE_STEPS=true bin/yumdrake-runner
@@ -297,6 +297,8 @@ Every variable starts with `YUMDRAKE_`. Secrets are never logged; a database URL
 | `YUMDRAKE_LEASE` | runner | `30s` | Go duration. How long a claimed leg belongs to a runner without a heartbeat. After that another runner may take it (at most 5 times, then the leg becomes `unknown`). |
 | `YUMDRAKE_HEARTBEAT` | runner | `10s` | Go duration; must be shorter than `YUMDRAKE_LEASE`. How often the runner renews the leases of its legs. |
 | `YUMDRAKE_RUNNER_POLL` | runner | `2s` | Go duration. How often the runner looks for queued legs when no wake-up arrived. |
+| `YUMDRAKE_ROLLOUT_POLL` | runner | `5s` | Go duration greater than zero. How often `ecs-deploy` checks a service's rollout. |
+| `YUMDRAKE_ROLLOUT_TIMEOUT` | runner | `15m` | Go duration greater than zero. How long `ecs-deploy` waits for a rollout before it reports the rollout unconfirmed. |
 | `YUMDRAKE_TEST_DATABASE_URL` | integration tests | none (required with `-tags integration`) | Same format as `YUMDRAKE_DATABASE_URL`. Set by `make test-integration` and CI. |
 | `YUMDRAKE_TEST_VALKEY_ADDR` | integration tests | none (required with `-tags integration`) | Same format as `YUMDRAKE_VALKEY_ADDR`. Set by `make test-integration` and CI. |
 | `YUMDRAKE_TEST_AWS_ENDPOINT` | Floci tests | none (required with `-tags floci`) | URL of Floci, `http://localhost:4577`. Set by `make test-floci`. |

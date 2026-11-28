@@ -405,6 +405,76 @@ func TestClaimedRowIsNotClaimedAgainUntilLeaseEnds(t *testing.T) {
 	}
 }
 
+func TestExpireStaleNotificationsSkipsOneBeingSent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := newPool(t)
+	fx := newRunFixture(t, pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	createdBefore := now.Add(-time.Hour)
+	old := now.Add(-2 * time.Hour)
+	enqueueOld := func(runID int64) {
+		t.Helper()
+		n := notif(runID, "waiting_approval", now)
+		n.CreatedAt = old
+		if err := EnqueueNotification(ctx, pool, n); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	// Claimed first, so its lease is still running at now and it is the only row a sender can claim.
+	beingSent := fx.insert(t, pool, "planned")
+	enqueueOld(beingSent.ID)
+	if got, err := ClaimDueNotifications(ctx, pool, now, 10); err != nil || len(got) != 1 {
+		t.Fatalf("claim = %+v, %v; want the one message", got, err)
+	}
+	unclaimed := fx.insert(t, pool, "planned")
+	enqueueOld(unclaimed.ID)
+	staleClaim := fx.insert(t, pool, "planned")
+	enqueueOld(staleClaim.ID)
+	if _, err := pool.Exec(ctx, "UPDATE notifications SET claimed_until = $2 WHERE run_id = $1", staleClaim.ID, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fresh := fx.insert(t, pool, "planned")
+	n := notif(fresh.ID, "waiting_approval", now)
+	n.CreatedAt = now
+	if err := EnqueueNotification(ctx, pool, n); err != nil {
+		t.Fatalf("enqueue fresh: %v", err)
+	}
+
+	expired, err := ExpireStaleNotifications(ctx, pool, createdBefore, now, "gave up")
+	if err != nil || expired != 2 {
+		t.Fatalf("ExpireStaleNotifications = %d, %v; want 2 expired", expired, err)
+	}
+
+	type outcome struct {
+		state, lastError string
+		leased           bool
+	}
+	outcomeOf := func(runID int64) outcome {
+		t.Helper()
+		var o outcome
+		if err := pool.QueryRow(ctx,
+			"SELECT state, last_error, claimed_until IS NOT NULL AND claimed_until > $2 FROM notifications WHERE run_id = $1",
+			runID, now).Scan(&o.state, &o.lastError, &o.leased); err != nil {
+			t.Fatalf("read run %d: %v", runID, err)
+		}
+		return o
+	}
+	if got := outcomeOf(unclaimed.ID); got.state != "failed" || got.lastError != "gave up" {
+		t.Errorf("unclaimed old message = %+v, want failed with the reason", got)
+	}
+	if got := outcomeOf(staleClaim.ID); got.state != "failed" || got.lastError != "gave up" {
+		t.Errorf("old message with a stale claim = %+v, want failed with the reason", got)
+	}
+	if got := outcomeOf(beingSent.ID); got.state != "pending" || !got.leased {
+		t.Errorf("message being sent = %+v, want still pending and leased", got)
+	}
+	if got := outcomeOf(fresh.ID); got.state != "pending" {
+		t.Errorf("message newer than the cutoff = %+v, want still pending", got)
+	}
+}
+
 func TestNotificationStats(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

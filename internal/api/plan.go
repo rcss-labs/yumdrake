@@ -9,8 +9,10 @@ import (
 )
 
 // planView is the manifest as the web application reads it. Artifact keys are
-// not part of it. restore_of, target_task_definition and not_restored belong
-// to later plans: the manifest has no source for them yet, so they are omitted.
+// not part of it. A restore's plan also carries restore_of (the run it
+// restores), each service's target_task_definition and, for a config file it
+// leaves as it is, not_restored (the reason, in words). A deploy's plan has
+// none of the three.
 type planView struct {
 	ID              string            `json:"id"`
 	RunID           int64             `json:"run_id"`
@@ -98,19 +100,23 @@ func planOf(m manifest.Manifest) planView {
 		Services: make([]planServiceView, 0, len(m.Services)),
 		Checks:   make([]planCheckView, 0, len(m.Checks)),
 	}
+	if m.RestoreOf > 0 {
+		view.RestoreOf = &m.RestoreOf
+	}
 	for _, s := range m.Services {
 		sv := planServiceView{
 			Name: s.Name, Group: s.Group, Version: s.Version, ImageDigest: s.ImageDigest,
 			ECSService: s.ECSService, ECRRepository: s.ECRRepository,
 			PreviousTaskDefinition: s.PreviousTaskDefinition, PreviousVersion: s.PreviousVersion,
-			Config: make([]planConfigView, 0, len(s.Config)),
+			TargetTaskDefinition: s.TargetTaskDefinition,
+			Config:               make([]planConfigView, 0, len(s.Config)),
 		}
 		for _, c := range s.Config {
 			cv := planConfigView{
 				Kind: c.Kind, Name: c.Name, Source: c.Source, Destination: c.Destination,
 				Branch: c.Branch, Commit: c.Commit, Fallback: c.Fallback, SourceVersionID: c.SourceVersionID,
 				SHA256: c.SHA256, Size: c.Size, PreviousExists: c.PreviousExists, PreviousSHA256: c.PreviousSHA256,
-				Change: c.Change,
+				Change: c.Change, NotRestored: c.NotRestored,
 			}
 			if c.Keys != nil {
 				cv.Keys = &planKeyDiff{Added: nonNil(c.Keys.Added), Removed: nonNil(c.Keys.Removed), Changed: nonNil(c.Keys.Changed)}

@@ -131,6 +131,17 @@ func (r *Runner) Register(kind string, e Executor) {
 	r.executors[kind] = e
 }
 
+// Executors returns a copy of the registered executors, by kind.
+func (r *Runner) Executors() map[string]Executor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	executors := make(map[string]Executor, len(r.executors))
+	for kind, e := range r.executors {
+		executors[kind] = e
+	}
+	return executors
+}
+
 func (r *Runner) executorFor(kind string) Executor {
 	r.mu.Lock()
 	defer r.mu.Unlock()

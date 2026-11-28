@@ -76,7 +76,11 @@ type stubAWS struct {
 	s3Err       error   // returned by every GetObject when set
 	serviceARN  string  // when set, the ARN DescribeServices reports for the service
 	ecsErrors   []error // returned, one per call, by DescribeServices before it answers
-	calls       []string
+	// taskDefStatus are the task definitions DescribeTaskDefinition knows, by ARN;
+	// taskDefErr is returned for every one when set.
+	taskDefStatus map[string]ecstypes.TaskDefinitionStatus
+	taskDefErr    error
+	calls         []string
 }
 
 func (s *stubAWS) record(call string) {
@@ -111,9 +115,18 @@ func (s *stubAWS) DescribeServices(_ context.Context, in *ecs.DescribeServicesIn
 	return &ecs.DescribeServicesOutput{Services: []ecstypes.Service{svc}}, nil
 }
 
-func (s *stubAWS) DescribeTaskDefinition(context.Context, *ecs.DescribeTaskDefinitionInput, ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
+func (s *stubAWS) DescribeTaskDefinition(_ context.Context, in *ecs.DescribeTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
 	s.record("ecs:DescribeTaskDefinition")
-	return nil, errors.New("revalidate has no need of task definition contents")
+	if s.taskDefErr != nil {
+		return nil, s.taskDefErr
+	}
+	status, ok := s.taskDefStatus[aws.ToString(in.TaskDefinition)]
+	if !ok {
+		return nil, errors.New("revalidate describes only the task definition a restore targets")
+	}
+	return &ecs.DescribeTaskDefinitionOutput{TaskDefinition: &ecstypes.TaskDefinition{
+		TaskDefinitionArn: in.TaskDefinition, Status: status,
+	}}, nil
 }
 
 func (s *stubAWS) DescribeImages(_ context.Context, in *ecr.DescribeImagesInput, _ ...func(*ecr.Options)) (*ecr.DescribeImagesOutput, error) {
@@ -515,6 +528,60 @@ func TestCancelledBeforeAnythingIsRead(t *testing.T) {
 	if out.State != "cancelled" || len(h.aws.calls) != 0 {
 		t.Fatalf("outcome = %q, calls = %v", out.State, h.aws.calls)
 	}
+}
+
+const webTaskDef4 = "arn:aws:ecs:eu-west-1:111122223333:task-definition/web:4"
+
+// restoreHarness is the harness for a restore: web runs webTaskDef and is to
+// go back to webTaskDef4. A restore pins no image by tag, so the image the
+// harness knows is not there to check.
+func restoreHarness() *harness {
+	h := newHarness()
+	h.manifest.Services[0].TargetTaskDefinition = webTaskDef4
+	h.manifest.Services[0].ImageDigest = ""
+	h.manifest.ID = manifest.Identity(h.manifest)
+	h.aws.images = map[string]bool{}
+	h.aws.taskDefStatus = map[string]ecstypes.TaskDefinitionStatus{webTaskDef4: ecstypes.TaskDefinitionStatusActive}
+	return h
+}
+
+func TestRevalidateChecksTheTargetTaskDefinitionOfARestore(t *testing.T) {
+	t.Run("active", func(t *testing.T) {
+		h := restoreHarness()
+		out := h.run(t)
+		if out.State != "succeeded" {
+			t.Fatalf("outcome = %q %q: %s\nlog:\n%s", out.State, out.FailureShort, out.FailureDetail, h.env.text())
+		}
+		if !contains(h.aws.calls, "ecs:DescribeTaskDefinition") {
+			t.Errorf("the target task definition was never looked up; calls = %v", h.aws.calls)
+		}
+		if contains(h.aws.calls, "ecr:DescribeImages") {
+			t.Errorf("a restore has no image to look up by digest; calls = %v", h.aws.calls)
+		}
+	})
+	t.Run("inactive is drift", func(t *testing.T) {
+		h := restoreHarness()
+		h.aws.taskDefStatus[webTaskDef4] = ecstypes.TaskDefinitionStatusInactive
+		h.wantDrift(t, h.run(t), "web", webTaskDef4, "INACTIVE")
+		if contains(h.aws.calls, "ecr:DescribeImages") {
+			t.Errorf("DescribeImages was called; calls = %v", h.aws.calls)
+		}
+	})
+	t.Run("gone is drift", func(t *testing.T) {
+		h := restoreHarness()
+		h.aws.taskDefStatus = nil
+		h.aws.taskDefErr = &smithy.GenericAPIError{Code: "ClientException", Message: secretAWSText}
+		h.wantDrift(t, h.run(t), "web", webTaskDef4)
+	})
+	t.Run("an answer that is not a yes or no is not drift", func(t *testing.T) {
+		h := restoreHarness()
+		h.aws.taskDefErr = &smithy.GenericAPIError{Code: "AccessDeniedException", Message: secretAWSText}
+		out := h.run(t)
+		if out.State != "failed" || out.FailureShort == "changed since planning" || !strings.Contains(out.FailureDetail, "AccessDeniedException") {
+			t.Errorf("outcome = %q %q (%s), want a failure to check that names the code", out.State, out.FailureShort, out.FailureDetail)
+		}
+		h.noLeaks(t, out)
+	})
 }
 
 func contains(list []string, want string) bool {

@@ -1,4 +1,5 @@
-// Package runnerapp wires the runner's real step executors. cmd/runner and the
+// Package runnerapp wires the runner's real step executors (resolve,
+// revalidate, copy-config and ecs-deploy). cmd/runner and the
 // end-to-end tests both call RegisterExecutors, so the tests cover the same
 // wiring production uses. Only the runner may import it: it builds deployment
 // credentials (internal/awsx/deploy), which the orchestrator must never reach.
@@ -22,6 +23,8 @@ import (
 	"github.com/rcss-labs/yamdrake/internal/runner"
 	"github.com/rcss-labs/yamdrake/internal/secrets"
 	"github.com/rcss-labs/yamdrake/internal/spec"
+	"github.com/rcss-labs/yamdrake/internal/steps/copyconfig"
+	"github.com/rcss-labs/yamdrake/internal/steps/ecsdeploy"
 	"github.com/rcss-labs/yamdrake/internal/steps/resolve"
 	"github.com/rcss-labs/yamdrake/internal/steps/revalidate"
 	"github.com/rcss-labs/yamdrake/internal/store"
@@ -32,16 +35,38 @@ type Registrar interface {
 	Register(kind string, e runner.Executor)
 }
 
-// RegisterExecutors registers the real "resolve" and "revalidate" on r,
-// replacing any fakes registered earlier under those names.
+// artifactStore holds the encrypted config copies the steps share. *artifacts.Store
+// satisfies it.
+type artifactStore interface {
+	Put(ctx context.Context, runID int64, service, kind, name string, previous bool, data []byte) (key, sha256hex string, err error)
+	Get(ctx context.Context, key, wantSHA256 string) ([]byte, error)
+}
+
+// RegisterExecutors registers the real executors on r, replacing any fakes
+// registered earlier under those names: "resolve", "revalidate",
+// "copy-config" and "ecs-deploy". The artifact store is built once and shared
+// by the steps that read or write config copies.
 func RegisterExecutors(ctx context.Context, log *slog.Logger, cfg config.Runner, pool *pgxpool.Pool, r Registrar) error {
-	identity, err := newIdentity(ctx, log, cfg, pool)
+	id, err := newIdentity(ctx, log, cfg, pool)
 	if err != nil {
 		return err
 	}
-	deps := resolveDeps(cfg, pool, identity, log)
+	artifactClient := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+	copies := artifacts.New(artifactClient, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID)
+	deps := resolveDeps(cfg, pool, id, copies, log)
 	r.Register("resolve", resolve.New(deps))
 	r.Register("revalidate", revalidate.New(deps))
+	r.Register("copy-config", copyconfig.New(copyconfig.Deps{
+		AWS:       id.credentials.For,
+		Artifacts: copies,
+		Options:   cfg.AWS,
+	}))
+	r.Register("ecs-deploy", ecsdeploy.New(ecsdeploy.Deps{
+		AWS:            id.credentials.For,
+		Options:        cfg.AWS,
+		PollEvery:      cfg.RolloutPoll,
+		DefaultTimeout: cfg.RolloutTimeout,
+	}))
 	return nil
 }
 
@@ -78,12 +103,11 @@ func newIdentity(ctx context.Context, log *slog.Logger, cfg config.Runner, pool 
 	}, nil
 }
 
-// resolveDeps wires the resolve executor. It reads the run's own inventory
-// snapshot (not the active one), uses the deployment credentials of the run's
-// account for ECS, ECR and S3, GitHub through the stored connections, and
-// writes config copies to the artifact bucket with the runner's own identity.
-func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.Logger) resolve.Deps {
-	artifactClient := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+// resolveDeps wires the resolve and revalidate executors. It reads the run's own
+// inventory snapshot (not the active one), uses the deployment credentials of
+// the run's account for ECS, ECR and S3, GitHub through the stored connections,
+// and writes config copies to the shared artifact store with the runner's own identity.
+func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, copies artifactStore, log *slog.Logger) resolve.Deps {
 	githubClient := app.GitHubClients(pool, id.cipher, cfg.GitHubAPIURL, log)
 	return resolve.Deps{
 		AWS: id.credentials.For,
@@ -94,7 +118,7 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			}
 			return client, nil
 		},
-		Artifacts: artifacts.New(artifactClient, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID),
+		Artifacts: copies,
 		Inventory: func(ctx context.Context, snapshotID int64) (spec.Inventory, error) {
 			snapshot, err := store.SnapshotByID(ctx, pool, snapshotID)
 			if err != nil {
@@ -106,6 +130,7 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			}
 			return inventory, nil
 		},
-		Options: cfg.AWS,
+		SourceRun: func(ctx context.Context, runID int64) (store.Run, error) { return store.GetRun(ctx, pool, runID) },
+		Options:   cfg.AWS,
 	}
 }

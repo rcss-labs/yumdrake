@@ -382,6 +382,8 @@ func TestEveryRouteEnforcesItsAction(t *testing.T) {
 		"GET /api/v1/runs/{id}/events":                  auth.View,
 		"POST /api/v1/runs/{id}/start":                  auth.View,
 		"POST /api/v1/runs/{id}/cancel":                 auth.View,
+		"POST /api/v1/runs/{id}/restore":                auth.View,
+		"POST /api/v1/runs/{id}/rerun-failed":           auth.View,
 		"GET /api/v1/approvals":                         auth.View,
 		"POST /api/v1/runs/{id}/approve":                auth.View,
 		"POST /api/v1/runs/{id}/reject":                 auth.View,

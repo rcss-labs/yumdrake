@@ -261,3 +261,29 @@ func LegsWithIntendedOperation(ctx context.Context, db DBTX, runID int64) (map[i
 	}
 	return out, nil
 }
+
+// ServicesWithDoneOperation returns, sorted and without repeats, the services
+// of the run's step legs that have an operation in state done with one of the
+// given names: the services the run really changed. The list is never nil.
+func ServicesWithDoneOperation(ctx context.Context, db DBTX, runID int64, names ...string) ([]string, error) {
+	rows, err := db.Query(ctx,
+		`SELECT DISTINCT l.service FROM operations o JOIN legs l ON l.id = o.leg_id
+		 WHERE l.run_id = $1 AND l.kind = 'step' AND o.state = 'done' AND o.name = ANY($2)
+		 ORDER BY l.service`, runID, names)
+	if err != nil {
+		return nil, fmt.Errorf("services with done operations: %w", mapError(err))
+	}
+	defer rows.Close()
+	services := []string{}
+	for rows.Next() {
+		var service string
+		if err := rows.Scan(&service); err != nil {
+			return nil, fmt.Errorf("services with done operations: %w", mapError(err))
+		}
+		services = append(services, service)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("services with done operations: %w", mapError(err))
+	}
+	return services, nil
+}

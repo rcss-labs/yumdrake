@@ -37,6 +37,13 @@ type rule struct {
 	code               string
 	rewrite            func([]byte) []byte
 	used               bool
+	// skip is how many matching calls pass before the rule applies.
+	skip int
+	// where, when set, narrows the rule to the calls it accepts.
+	where func(Request) bool
+	// held is closed when the rule has caught a call; release lets it go.
+	held    chan Request
+	release chan struct{}
 }
 
 func (r *rule) matches(service, operation string) bool {
@@ -58,6 +65,7 @@ type Proxy struct {
 	requests []Request
 	fails    []*rule
 	drops    []*rule
+	holds    []*rule
 	rewrites []*rule
 }
 
@@ -99,6 +107,28 @@ func (p *Proxy) FailNext(service, operation, awsErrorCode string, status int) {
 	p.fails = append(p.fails, &rule{service: service, operation: operation, code: awsErrorCode, status: status})
 }
 
+// FailNth is FailNext for the nth call from now on that where accepts (nil
+// accepts every call of the operation; 1 is the next one): the calls before it
+// pass through untouched.
+func (p *Proxy) FailNth(service, operation string, n int, where func(Request) bool, awsErrorCode string, status int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fails = append(p.fails, &rule{service: service, operation: operation, code: awsErrorCode, status: status, skip: n - 1, where: where})
+}
+
+// HoldAfterForward lets the next matching call reach Floci, then keeps its
+// response back until release is called (or the caller gives up and closes the
+// connection): the effect happened, the caller is still waiting. held is
+// sent the held request once a call is being held.
+func (p *Proxy) HoldAfterForward(service, operation string) (held <-chan Request, release func()) {
+	r := &rule{service: service, operation: operation, held: make(chan Request, 1), release: make(chan struct{})}
+	p.mu.Lock()
+	p.holds = append(p.holds, r)
+	p.mu.Unlock()
+	var once sync.Once
+	return r.held, func() { once.Do(func() { close(r.release) }) }
+}
+
 // Rewrite edits the response body of every matching call from now on.
 func (p *Proxy) Rewrite(service, operation string, fn func(body []byte) []byte) {
 	p.mu.Lock()
@@ -115,12 +145,33 @@ func (p *Proxy) DropAfterForward(service, operation string) {
 	p.drops = append(p.drops, &rule{service: service, operation: operation})
 }
 
+// DropAfterForwardWhere is DropAfterForward for the next times calls that where
+// accepts. The SDK retries a cut connection, so drop as many calls as it tries.
+func (p *Proxy) DropAfterForwardWhere(service, operation string, times int, where func(Request) bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for range times {
+		p.drops = append(p.drops, &rule{service: service, operation: operation, where: where})
+	}
+}
+
+// DisarmDrops removes every drop rule that has not caught a call yet.
+func (p *Proxy) DisarmDrops() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.drops = nil
+}
+
 // take marks and returns the first unused rule in list that matches.
-func (p *Proxy) take(list []*rule, service, operation string) *rule {
+func (p *Proxy) take(list []*rule, req Request) *rule {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, r := range list {
-		if r.matches(service, operation) {
+		if r.matches(req.Service, req.Operation) && (r.where == nil || r.where(req)) {
+			if r.skip > 0 {
+				r.skip--
+				continue
+			}
 			r.used = true
 			return r
 		}
@@ -135,11 +186,12 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	service, operation, account := classify(r, body)
+	req := Request{Service: service, Operation: operation, Account: account, Method: r.Method, Path: r.URL.Path, Host: r.Host, Body: body}
 	p.mu.Lock()
-	p.requests = append(p.requests, Request{Service: service, Operation: operation, Account: account, Method: r.Method, Path: r.URL.Path, Host: r.Host, Body: body})
+	p.requests = append(p.requests, req)
 	p.mu.Unlock()
 
-	if f := p.take(p.fails, service, operation); f != nil {
+	if f := p.take(p.fails, req); f != nil {
 		writeAWSError(w, service, f.code, f.status)
 		return
 	}
@@ -150,7 +202,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if d := p.take(p.drops, service, operation); d != nil {
+	if d := p.take(p.drops, req); d != nil {
 		if hj, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hj.Hijack(); err == nil {
 				_ = conn.Close()
@@ -158,6 +210,15 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		panic(http.ErrAbortHandler) // cuts the connection without a response
+	}
+
+	if h := p.take(p.holds, req); h != nil {
+		h.held <- req
+		select {
+		case <-h.release:
+		case <-r.Context().Done():
+			return // the caller gave up: nobody is left to answer
+		}
 	}
 
 	p.mu.Lock()

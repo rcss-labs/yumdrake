@@ -90,11 +90,16 @@ type seededService struct {
 // environment that is not seeded still appears in the inventory, with
 // coordinates that point nowhere, so the inventory always has both.
 type seededEnv struct {
-	name, label, suffix  string
-	acct                 *awstest.Account
-	seeded               bool
-	srcBucket, dstBucket string
-	services             map[string]*seededService
+	name, label, suffix string
+	acct                *awstest.Account
+	seeded              bool
+	// imagesNamedAsInInventory makes the services' task definitions name their
+	// image by the repository URI the inventory holds (<account>.dkr.ecr.<region>.amazonaws.com/...),
+	// which is what ecs-deploy matches a container by; Floci's own repository URI
+	// has another host. The plan tests do not deploy and keep Floci's.
+	imagesNamedAsInInventory bool
+	srcBucket, dstBucket     string
+	services                 map[string]*seededService
 }
 
 func (e *seededEnv) ecrURI(service string) string {
@@ -118,7 +123,11 @@ func (e *seededEnv) seed(t *testing.T) {
 	for _, name := range planServices {
 		s := &seededService{name: name, repo: fmt.Sprintf("yd-%s-%s", name, e.suffix), cluster: fmt.Sprintf("yd-c-%s-%s", name, e.suffix)}
 		s.repoURI, s.digest = e.acct.Repo(flociRegion, s.repo, runningVersion, planVersion)
-		s.serviceARN, s.taskDef = e.acct.Service(flociRegion, s.cluster, name, s.repoURI+":"+runningVersion)
+		image := s.repoURI + ":" + runningVersion
+		if e.imagesNamedAsInInventory {
+			image = e.ecrURI(name) + ":" + runningVersion
+		}
+		s.serviceARN, s.taskDef = e.acct.Service(flociRegion, s.cluster, name, image)
 		e.services[name] = s
 	}
 	e.acct.Bucket(e.srcBucket, true)
@@ -183,6 +192,15 @@ type flociOpts struct {
 	// noVersionBranch leaves the config repository without a branch for the
 	// planned version, so only "dev" exists.
 	noVersionBranch bool
+	// real runs the runner with the real copy-config and ecs-deploy steps, talking
+	// to Floci through its own proxy (flociStack.runnerProxy), instead of the
+	// recording stand-ins. The deployment tests set it.
+	real bool
+	// noRunner starts no runner: the test starts its own with startRunner.
+	noRunner bool
+	// rollMaxParallel, when above zero, limits how many services the roll step
+	// deploys at once.
+	rollMaxParallel int
 }
 
 type flociStack struct {
@@ -197,6 +215,14 @@ type flociStack struct {
 	artifactBucket string
 	envs           map[string]*seededEnv
 	rec            *deployRecorder
+	// runnerProxy sits between the runners and Floci (real mode), so a test can
+	// see and disturb what the steps do.
+	runnerProxy *awstest.Proxy
+	opts        flociOpts
+	databaseURL string
+	keyPrefix   string
+	valkeyAddr  string
+	runners     []*flociRunner
 }
 
 func startFloci(t *testing.T, o flociOpts) *flociStack {
@@ -207,7 +233,7 @@ func startFloci(t *testing.T, o flociOpts) *flociStack {
 	}
 	w := awstest.New(t)
 	sfx := awstest.RandomSuffix()
-	s := &flociStack{t: t, w: w, proxy: w.Proxy(t), rec: &deployRecorder{}, platform: w.Account(awstest.RandomAccountID()), artifactBucket: "yd-art-" + sfx}
+	s := &flociStack{t: t, w: w, proxy: w.Proxy(t), rec: &deployRecorder{}, opts: o, runnerProxy: w.Proxy(t), platform: w.Account(awstest.RandomAccountID()), artifactBucket: "yd-art-" + sfx}
 	s.envs = map[string]*seededEnv{
 		devEnv:  {name: devEnv, label: "dev", suffix: "d" + sfx, acct: w.Account(awstest.RandomAccountID())},
 		prodEnv: {name: prodEnv, label: "prod", suffix: "p" + sfx, acct: w.Account(awstest.RandomAccountID())},
@@ -216,6 +242,7 @@ func startFloci(t *testing.T, o flociOpts) *flociStack {
 		e.srcBucket, e.dstBucket = "yd-src-"+e.suffix, "yd-dst-"+e.suffix
 	}
 	for _, name := range o.seed {
+		s.envs[name].imagesNamedAsInInventory = o.real
 		s.envs[name].seed(t)
 	}
 	s.platform.Bucket(s.artifactBucket, false)
@@ -259,7 +286,10 @@ func startFloci(t *testing.T, o flociOpts) *flociStack {
 	}
 	s.jobID = job.ID
 
-	s.startRunner(databaseURL, keyPrefix, valkeyAddr)
+	s.databaseURL, s.keyPrefix, s.valkeyAddr = databaseURL, keyPrefix, valkeyAddr
+	if !o.noRunner {
+		s.startRunner("runner-floci")
+	}
 	return s
 }
 
@@ -301,6 +331,10 @@ func (s *flociStack) loadGitHub(o flociOpts) {
 		}
 		write("services/"+name+".yaml", b.String())
 	}
+	rollLimit := ""
+	if o.rollMaxParallel > 0 {
+		rollLimit = fmt.Sprintf("    max_parallel: %d\n", o.rollMaxParallel)
+	}
 	write("jobs/deploy.yaml", `apiVersion: yumdrake/v1
 kind: Job
 job: deploy
@@ -318,7 +352,7 @@ steps:
   - name: roll
     use: ecs-deploy
     group: all
-    needs:
+`+rollLimit+`    needs:
       - step: config
         scope: service
 `)
@@ -344,39 +378,71 @@ steps:
 	}
 }
 
+// flociRunner is one in-process runner of the stack.
+type flociRunner struct {
+	id     string
+	pool   *pgxpool.Pool
+	cancel context.CancelFunc
+}
+
+// kill simulates the runner's process dying: its database connections close,
+// so its heartbeats, log flushes, result write and release all fail, as from a
+// process that no longer exists. A call it already has on the wire may still
+// change AWS once. Its leg is swept to another runner when the lease runs out.
+func (r *flociRunner) kill() { r.pool.Close() }
+
+// The lease and heartbeat of a runner with the real steps: short, so a killed
+// runner's leg is swept to another runner within seconds.
+const (
+	realLease     = 4 * time.Second
+	realHeartbeat = time.Second
+)
+
 // startRunner starts one runner in-process, configured and wired the way
-// cmd/runner is, with the stand-ins for copy-config and ecs-deploy.
-func (s *flociStack) startRunner(databaseURL, keyPrefix, valkeyAddr string) {
+// cmd/runner is. Without opts.real it has stand-ins for copy-config and
+// ecs-deploy; with it the real steps, talking to Floci through runnerProxy.
+func (s *flociStack) startRunner(id string) *flociRunner {
 	t := s.t
+	t.Helper()
+	endpoint := s.w.Endpoint // the runner talks to Floci directly
+	if s.opts.real {
+		endpoint = s.runnerProxy.URL
+	}
 	env := map[string]string{
-		"YUMDRAKE_DATABASE_URL":      databaseURL,
-		"YUMDRAKE_VALKEY_ADDR":       valkeyAddr,
+		"YUMDRAKE_DATABASE_URL":      s.databaseURL,
+		"YUMDRAKE_VALKEY_ADDR":       s.valkeyAddr,
 		"YUMDRAKE_LOCAL_SECRET_KEY":  localSecretKey,
-		"YUMDRAKE_VALKEY_KEY_PREFIX": keyPrefix,
+		"YUMDRAKE_VALKEY_KEY_PREFIX": s.keyPrefix,
 		"YUMDRAKE_ARTIFACT_BUCKET":   s.artifactBucket,
 		"YUMDRAKE_GITHUB_API_URL":    s.gh.URL(),
-		"YUMDRAKE_AWS_ENDPOINT_URL":  s.w.Endpoint, // the runner talks to Floci directly
-		"YUMDRAKE_RUNNER_ID":         "runner-floci",
+		"YUMDRAKE_AWS_ENDPOINT_URL":  endpoint,
+		"YUMDRAKE_RUNNER_ID":         id,
 		"YUMDRAKE_LOG_LEVEL":         "error",
+		"YUMDRAKE_ROLLOUT_POLL":      "1s",
+		"YUMDRAKE_ROLLOUT_TIMEOUT":   "3m",
 	}
 	cfg, err := config.LoadRunner(func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatalf("load runner config: %v", err)
 	}
-	pool, err := db.Open(context.Background(), databaseURL)
+	pool, err := db.Open(context.Background(), s.databaseURL)
 	if err != nil {
 		t.Fatalf("open database for the runner: %v", err)
 	}
-	valkeyClient, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{valkeyAddr}, ForceSingleClient: true})
+	valkeyClient, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{s.valkeyAddr}, ForceSingleClient: true})
 	if err != nil {
 		t.Fatalf("open valkey: %v", err)
 	}
 	quiet := slog.New(slog.DiscardHandler)
-	bus := wake.New(valkeyClient, quiet, wake.WithKeyPrefix(keyPrefix))
+	bus := wake.New(valkeyClient, quiet, wake.WithKeyPrefix(s.keyPrefix))
 	sink := logs.NewWriter(pool, 100*time.Millisecond, 100, time.Now, func(runID int64) {
 		bus.Publish(context.Background(), wake.TopicLogs, runID)
 	}, quiet)
-	r := runner.New(queue.New(pool, 10*time.Second, nil), sink, cfg.RunnerID, 8, 2*time.Second, 100*time.Millisecond, quiet).
+	lease, heartbeat := 10*time.Second, 2*time.Second
+	if s.opts.real {
+		lease, heartbeat = realLease, realHeartbeat
+	}
+	r := runner.New(queue.New(pool, lease, nil), sink, cfg.RunnerID, 8, heartbeat, 100*time.Millisecond, quiet).
 		WithShutdownTimeout(10 * time.Second).
 		WithSettledNotifier(func(runID int64) { bus.Publish(context.Background(), wake.TopicRuns, runID) })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -384,8 +450,10 @@ func (s *flociStack) startRunner(databaseURL, keyPrefix, valkeyAddr string) {
 		cancel()
 		t.Fatalf("register the runner's executors: %v", err)
 	}
-	r.Register("copy-config", s.rec.executor("copy-config"))
-	r.Register("ecs-deploy", s.rec.executor("ecs-deploy"))
+	if !s.opts.real {
+		r.Register("copy-config", s.rec.executor("copy-config"))
+		r.Register("ecs-deploy", s.rec.executor("ecs-deploy"))
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -405,6 +473,9 @@ func (s *flociStack) startRunner(databaseURL, keyPrefix, valkeyAddr string) {
 		pool.Close()
 		valkeyClient.Close()
 	})
+	fr := &flociRunner{id: id, pool: pool, cancel: cancel}
+	s.runners = append(s.runners, fr)
+	return fr
 }
 
 // ---- API helpers ----

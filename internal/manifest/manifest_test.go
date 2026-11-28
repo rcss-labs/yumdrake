@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -129,5 +130,73 @@ func TestFailed(t *testing.T) {
 	failed := sampleManifest().Failed()
 	if len(failed) != 1 || failed[0].Name != "tags" {
 		t.Fatalf("Failed() = %+v, want only the failed check", failed)
+	}
+}
+
+// Pinned before the restore fields existed: a deploy manifest's identity must not move.
+const deployIdentityBeforeRestoreFields = "99d475132efe5bbd64bb3ae2e28d02a9c66c909ea0390738ba71f73b3dc6148a"
+
+func TestIdentityOfADeployManifestIsUnchanged(t *testing.T) {
+	if got := Identity(sampleManifest()); got != deployIdentityBeforeRestoreFields {
+		t.Fatalf("deploy identity changed: got %s, want %s", got, deployIdentityBeforeRestoreFields)
+	}
+}
+
+func TestIdentityChangesWithTargetTaskDefinition(t *testing.T) {
+	unset := Identity(sampleManifest())
+	first := sampleManifest()
+	first.Services[0].TargetTaskDefinition = "arn:aws:ecs:eu-west-1:123456789012:task-definition/web:3"
+	second := sampleManifest()
+	second.Services[0].TargetTaskDefinition = "arn:aws:ecs:eu-west-1:123456789012:task-definition/web:2"
+
+	firstID, secondID := Identity(first), Identity(second)
+	if firstID == secondID {
+		t.Fatal("two different target task definitions gave the same identity")
+	}
+	if firstID == unset || secondID == unset {
+		t.Fatal("a set target task definition gave the same identity as an unset one")
+	}
+}
+
+func TestIdentityChangesWithNotRestored(t *testing.T) {
+	base := Identity(sampleManifest())
+	m := sampleManifest()
+	m.Services[0].Config[0].NotRestored = "file changed since the source run"
+	if Identity(m) == base {
+		t.Fatal("setting not_restored did not change the identity")
+	}
+}
+
+func TestRestoreFieldsRoundTripJSON(t *testing.T) {
+	restore := sampleManifest()
+	restore.RestoreOf = 5
+	restore.Services[0].TargetTaskDefinition = "arn:aws:ecs:eu-west-1:123456789012:task-definition/web:3"
+	restore.Services[0].Config[0].NotRestored = "file changed since the source run"
+
+	raw, err := json.Marshal(restore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"restore_of":`, `"target_task_definition":`, `"not_restored":`} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("marshaled restore manifest lacks %s: %s", key, raw)
+		}
+	}
+	var back Manifest
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back, restore) {
+		t.Fatalf("round trip changed the manifest:\n got %+v\nwant %+v", back, restore)
+	}
+
+	deploy, err := json.Marshal(sampleManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"restore_of", "target_task_definition", "not_restored"} {
+		if strings.Contains(string(deploy), key) {
+			t.Fatalf("deploy manifest JSON contains %s: %s", key, deploy)
+		}
 	}
 }

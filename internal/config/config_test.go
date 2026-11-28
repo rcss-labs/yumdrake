@@ -631,6 +631,26 @@ func TestLoadRunnerEngineDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRunnerRolloutDefaultsAndOverrides(t *testing.T) {
+	cfg, err := LoadRunner(envFrom(requiredEnv()))
+	if err != nil {
+		t.Fatalf("LoadRunner() error = %v", err)
+	}
+	if cfg.RolloutPoll != 5*time.Second || cfg.RolloutTimeout != 15*time.Minute {
+		t.Errorf("defaults: RolloutPoll=%v RolloutTimeout=%v, want 5s and 15m", cfg.RolloutPoll, cfg.RolloutTimeout)
+	}
+	env := requiredEnv()
+	env["YUMDRAKE_ROLLOUT_POLL"] = "250ms"
+	env["YUMDRAKE_ROLLOUT_TIMEOUT"] = "30m"
+	cfg, err = LoadRunner(envFrom(env))
+	if err != nil {
+		t.Fatalf("LoadRunner() error = %v", err)
+	}
+	if cfg.RolloutPoll != 250*time.Millisecond || cfg.RolloutTimeout != 30*time.Minute {
+		t.Errorf("overrides: RolloutPoll=%v RolloutTimeout=%v, want 250ms and 30m", cfg.RolloutPoll, cfg.RolloutTimeout)
+	}
+}
+
 func TestLoadRunnerRefusesHeartbeatNotShorterThanLease(t *testing.T) {
 	for _, heartbeat := range []string{"30s", "45s"} {
 		env := requiredEnv()

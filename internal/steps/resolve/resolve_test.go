@@ -24,7 +24,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 
+	"github.com/rcss-labs/yamdrake/internal/artifacts"
 	"github.com/rcss-labs/yamdrake/internal/engine"
 	"github.com/rcss-labs/yamdrake/internal/github"
 	"github.com/rcss-labs/yamdrake/internal/manifest"
@@ -133,7 +135,8 @@ func (s *stubAWS) DescribeTaskDefinition(_ context.Context, in *ecs.DescribeTask
 	s.record("ecs:DescribeTaskDefinition")
 	td, ok := s.taskDefs[aws.ToString(in.TaskDefinition)]
 	if !ok {
-		return nil, fmt.Errorf("stub: unknown task definition %s", aws.ToString(in.TaskDefinition))
+		// What ECS answers for a task definition that does not exist.
+		return nil, &smithy.GenericAPIError{Code: "ClientException", Message: "Unable to describe task definition."}
 	}
 	return &td, nil
 }
@@ -276,6 +279,22 @@ func (a *stubArtifacts) Put(_ context.Context, run int64, service, kind, name st
 	a.items[key] = append([]byte(nil), data...)
 	a.mu.Unlock()
 	return key, sha(data), nil
+}
+
+// Get reads a copy back, as *artifacts.Store does: a key that is not there is
+// the S3 "no such key" error, and bytes that do not hash to the checksum are
+// artifacts.ErrCorrupt.
+func (a *stubArtifacts) Get(_ context.Context, key, wantSHA256 string) ([]byte, error) {
+	a.mu.Lock()
+	data, ok := a.items[key]
+	a.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("artifacts: get %s: %w", key, &s3types.NoSuchKey{Message: aws.String("no such key")})
+	}
+	if sha(data) != wantSHA256 {
+		return nil, fmt.Errorf("%w: %s", artifacts.ErrCorrupt, key)
+	}
+	return append([]byte(nil), data...), nil
 }
 
 type testEnv struct {

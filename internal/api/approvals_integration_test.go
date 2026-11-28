@@ -219,6 +219,32 @@ func TestApproveAndRejectEndpoints(t *testing.T) {
 	})
 }
 
+func TestDecidingAnExpiredApprovalAnswersConflict(t *testing.T) {
+	f := newRunFixture(t)
+	approver := f.userWith("approver", store.Grant{Action: "approve", Label: "prod"})
+	const expiredMessage = "The approval expired before the decision. The run has been expired."
+
+	for _, action := range []string{"approve", "reject"} {
+		t.Run(action, func(t *testing.T) {
+			runID, manifestID := f.waitingRun(f.admin.ID, prodEnvironment)
+			// Move the open approval's expiry into the past, as the engine test does, without waiting for the sweep.
+			f.exec(`UPDATE approvals SET expires_at = now() - interval '1 minute' WHERE run_id = $1 AND decision = ''`, runID)
+
+			body := map[string]any{"manifest_id": manifestID}
+			if action == "reject" {
+				body = map[string]any{} // the reject body takes no manifest id, as in TestApproveAndRejectEndpoints
+			}
+			code, got := f.post(approver, runPath(runID, "/"+action), body)
+			if code != http.StatusConflict || errorCode(t, got) != "conflict" || errorMessage(got) != expiredMessage {
+				t.Errorf("%s of an expired approval = %d %v, want 409 conflict %q", action, code, got, expiredMessage)
+			}
+			if run := f.mustDo("GET", runPath(runID, ""), nil, http.StatusOK); run["state"] != "expired" {
+				t.Errorf("run after %s of an expired approval = %v, want expired", action, run["state"])
+			}
+		})
+	}
+}
+
 func TestRunViewShowsAWithdrawnApprovalOfACancelledRun(t *testing.T) {
 	f := newRunFixture(t)
 	runID, _ := f.waitingRun(f.admin.ID, prodEnvironment)

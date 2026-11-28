@@ -6,15 +6,20 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rcss-labs/yamdrake/internal/config"
 	"github.com/rcss-labs/yamdrake/internal/db"
+	"github.com/rcss-labs/yamdrake/internal/runner"
 	"github.com/rcss-labs/yamdrake/internal/testutil/testdb"
 )
 
@@ -166,6 +171,87 @@ func TestRunnerExits0WhenSignalledDuringSchemaWait(t *testing.T) {
 	}
 	if !strings.Contains(r.stdout.String(), "stopped during start-up") {
 		t.Errorf("expected a 'stopped during start-up' line: %s", r.stdout.String())
+	}
+}
+
+// registeredKinds builds the runner the way serve does and registers its executors.
+func registeredKinds(t *testing.T, env map[string]string) map[string]bool {
+	t.Helper()
+	cfg, err := config.LoadRunner(envFrom(env))
+	if err != nil {
+		t.Fatalf("LoadRunner: %v", err)
+	}
+	pool, err := db.Open(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := newRunner(cfg, pool, nil, nil, log)
+	if err := registerExecutors(context.Background(), cfg, pool, r, log); err != nil {
+		t.Fatalf("registerExecutors: %v", err)
+	}
+	kinds := map[string]bool{}
+	for kind, e := range r.Executors() {
+		kinds[kind] = true
+		if isFakeExecutor(e) {
+			t.Errorf("kind %q is registered with a fake executor", kind)
+		}
+	}
+	return kinds
+}
+
+// isFakeExecutor reports whether e is one of the executors of internal/steps/fake.
+func isFakeExecutor(e runner.Executor) bool {
+	typ := reflect.TypeOf(e)
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	return strings.HasSuffix(typ.PkgPath(), "/internal/steps/fake")
+}
+
+func TestRunnerRegistersRealStepsByDefault(t *testing.T) {
+	env := runnerEnv(t, testdb.New(t), freeAddr(t), "30s")
+	kinds := registeredKinds(t, env)
+	want := []string{"resolve", "revalidate", "copy-config", "ecs-deploy"}
+	if len(kinds) != len(want) {
+		t.Errorf("registered kinds = %v, want exactly %v", kinds, want)
+	}
+	for _, kind := range want {
+		if !kinds[kind] {
+			t.Errorf("kind %q is not registered", kind)
+		}
+	}
+}
+
+func TestFakeModeKeepsFakeDeploySteps(t *testing.T) {
+	env := runnerEnv(t, testdb.New(t), freeAddr(t), "30s")
+	env["YUMDRAKE_ENV"] = "dev"
+	env["YUMDRAKE_FAKE_STEPS"] = "true"
+	cfg, err := config.LoadRunner(envFrom(env))
+	if err != nil {
+		t.Fatalf("LoadRunner: %v", err)
+	}
+	pool, err := db.Open(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := newRunner(cfg, pool, nil, nil, log)
+	if err := registerExecutors(context.Background(), cfg, pool, r, log); err != nil {
+		t.Fatalf("registerExecutors: %v", err)
+	}
+	executors := r.Executors()
+	for _, kind := range []string{"copy-config", "ecs-deploy"} {
+		if !isFakeExecutor(executors[kind]) {
+			t.Errorf("kind %q should be the fake in dev fake mode", kind)
+		}
+	}
+	for _, kind := range []string{"resolve", "revalidate"} {
+		if isFakeExecutor(executors[kind]) {
+			t.Errorf("kind %q should stay real in dev fake mode", kind)
+		}
 	}
 }
 

@@ -25,6 +25,12 @@ import (
 // resolving with a snapshot of the job. The resolve leg is queued; the run
 // becomes planned (or, with autoStart, moves on) when it succeeds.
 func (e *Engine) Create(ctx context.Context, p auth.Principal, jobSourceID int64, envName string, sel Selection, via string, autoStart bool) (store.Run, error) {
+	return e.create(ctx, p, jobSourceID, envName, sel, via, autoStart, nil)
+}
+
+// create is Create for a run that may follow another (a re-run of failed
+// services): a non-nil parentRunID is stored on the run and named in its audit entry.
+func (e *Engine) create(ctx context.Context, p auth.Principal, jobSourceID int64, envName string, sel Selection, via string, autoStart bool, parentRunID *int64) (store.Run, error) {
 	source, err := store.GetJobSource(ctx, e.db, jobSourceID)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("create run: %w", err)
@@ -78,7 +84,7 @@ func (e *Engine) Create(ctx context.Context, p auth.Principal, jobSourceID int64
 		Environment: envName, Label: environment.Label, AWSAccount: environment.AWSAccount, FolderID: source.FolderID,
 		Selection: selectionJSON, LockResources: built.Resources,
 		ApprovalRequired: needsApproval(job, environment.Label), AutoStart: autoStart,
-		State: "resolving", RequestedBy: p.UserID, Via: via, CreatedAt: now,
+		State: "resolving", RequestedBy: p.UserID, Via: via, CreatedAt: now, ParentRunID: parentRunID,
 	}
 
 	var created store.Run
@@ -91,9 +97,12 @@ func (e *Engine) Create(ctx context.Context, p auth.Principal, jobSourceID int64
 			fmt.Sprintf("Run created by %s for %s in %s; working out the plan.", displayName(p), job.ID, envName), now); err != nil {
 			return err
 		}
+		detail := map[string]any{"job_id": job.ID, "environment": envName, "via": via, "auto_start": autoStart, "approval_required": created.ApprovalRequired}
+		if parentRunID != nil {
+			detail["rerun_of"] = *parentRunID
+		}
 		return audit.Record(ctx, tx, &p, now, audit.Event{
-			Action: "run.create", TargetType: "run", TargetID: fmt.Sprint(created.ID),
-			Detail: map[string]any{"job_id": job.ID, "environment": envName, "via": via, "auto_start": autoStart, "approval_required": created.ApprovalRequired},
+			Action: "run.create", TargetType: "run", TargetID: fmt.Sprint(created.ID), Detail: detail,
 		})
 	})
 	if err != nil {
@@ -209,9 +218,17 @@ func (e *Engine) record(ctx context.Context, tx pgx.Tx, p *auth.Principal, actio
 // needs one, otherwise it queues and tries to take its locks at once.
 func (e *Engine) Start(ctx context.Context, p auth.Principal, runID int64) error {
 	return e.inTx(ctx, runID, func(tx pgx.Tx, o *outcome) error {
-		run, err := e.lockedRunFor(ctx, tx, p, runID, auth.Run)
+		run, err := store.LockRun(ctx, tx, runID)
 		if err != nil {
 			return fmt.Errorf("start run %d: %w", runID, err)
+		}
+		// A restore goes through the restore permission, a deploy through run.
+		needed := auth.Run
+		if run.Kind == "restore" {
+			needed = auth.Restore
+		}
+		if !p.Can(needed, targetOf(run)) {
+			return fmt.Errorf("start run %d: %w", runID, ErrForbidden)
 		}
 		if run.State != "planned" {
 			return fmt.Errorf("start run %d: %w: it is %s", runID, ErrWrongState, run.State)

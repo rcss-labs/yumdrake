@@ -79,12 +79,26 @@ type Registrar interface {
 
 // Register adds the fakes for resolve, revalidate, copy-config and ecs-deploy.
 func Register(r Registrar, opts Options) {
+	f := newFakes(opts)
+	r.Register("resolve", runner.Executor(executorFunc(f.resolve)))
+	r.Register("revalidate", runner.Executor(executorFunc(f.revalidate)))
+	deploySteps(r, f)
+}
+
+// RegisterDeploySteps adds only the fakes for copy-config and ecs-deploy, so
+// the real resolve and revalidate stay in place.
+func RegisterDeploySteps(r Registrar, opts Options) {
+	deploySteps(r, newFakes(opts))
+}
+
+func newFakes(opts Options) *fakes {
 	if opts.World == nil {
 		opts.World = NewWorld()
 	}
-	f := &fakes{opts: opts}
-	r.Register("resolve", runner.Executor(executorFunc(f.resolve)))
-	r.Register("revalidate", runner.Executor(executorFunc(f.revalidate)))
+	return &fakes{opts: opts}
+}
+
+func deploySteps(r Registrar, f *fakes) {
 	r.Register("copy-config", runner.Executor(executorFunc(f.copyConfig)))
 	r.Register("ecs-deploy", runner.Executor(executorFunc(f.ecsDeploy)))
 }

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,20 +104,25 @@ func imageDir() string {
 // The image is held by a local tag unique to this World, and callers push by
 // id. A name shared with other tests or processes can be rebuilt to a different
 // image id between two pushes of one Repo call, and the old image deleted.
-func (w *World) localImage(marker string) string {
+func (w *World) localImage(marker string) string { return w.buildImage(marker, "") }
+
+// buildImage is localImage for an image that exits with exitCode right away
+// when exitCode is not empty. The cache is keyed by marker and exit code.
+func (w *World) buildImage(marker, exitCode string) string {
 	w.t.Helper()
 	w.imagesMu.Lock()
 	defer w.imagesMu.Unlock()
-	if id, ok := w.images[marker]; ok {
+	cacheKey := marker + "\x00" + exitCode
+	if id, ok := w.images[cacheKey]; ok {
 		return id
 	}
 	if w.images == nil {
 		w.images = map[string]string{}
 	}
 	hold := "yumdrake-awstest:hold-" + RandomSuffix() + RandomSuffix()
-	id := w.dockerRun("build", "-q", "--build-arg", "MARKER="+marker, "-t", hold, imageDir())
+	id := w.dockerRun("build", "-q", "--build-arg", "MARKER="+marker, "--build-arg", "EXIT_CODE="+exitCode, "-t", hold, imageDir())
 	w.t.Cleanup(func() { _ = exec.Command("docker", "rmi", hold).Run() }) //nolint:gosec // test helper: arguments are ours
-	w.images[marker] = id
+	w.images[cacheKey] = id
 	return id
 }
 
@@ -132,8 +138,13 @@ func (w *World) registryHost() string {
 
 func (a *Account) push(region, repo, tag, marker string) {
 	a.w.t.Helper()
+	a.pushImage(region, repo, tag, a.w.localImage(marker))
+}
+
+func (a *Account) pushImage(region, repo, tag, imageID string) {
+	a.w.t.Helper()
 	remote := fmt.Sprintf("%s/%s/%s/%s:%s", a.w.registryHost(), a.ID, region, repo, tag)
-	a.w.dockerRun("tag", a.w.localImage(marker), remote)
+	a.w.dockerRun("tag", imageID, remote)
 	a.w.t.Cleanup(func() { _ = exec.Command("docker", "rmi", remote).Run() }) //nolint:gosec // test helper: arguments are ours
 	a.w.dockerRun("push", remote)
 }
@@ -182,6 +193,14 @@ func (a *Account) Repo(region, name string, tags ...string) (uri string, digest 
 func (a *Account) RepoImage(region, name, tag, marker string) (digest string) {
 	a.w.t.Helper()
 	a.push(region, name, tag, marker)
+	return a.digestOf(region, name, tag)
+}
+
+// RepoCrashingImage pushes an image that exits with exitCode as soon as it
+// starts under one tag of an existing repository.
+func (a *Account) RepoCrashingImage(region, name, tag, marker string, exitCode int) (digest string) {
+	a.w.t.Helper()
+	a.pushImage(region, name, tag, a.w.buildImage(marker, strconv.Itoa(exitCode)))
 	return a.digestOf(region, name, tag)
 }
 

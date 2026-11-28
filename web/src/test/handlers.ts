@@ -1323,7 +1323,11 @@ export const handlers: HttpHandler[] = [
     return json({ lines: page, next: page.length > 0 ? `c${start + page.length}` : after, gaps: state.logGaps[run.id] ?? [] })
   }),
 
-  runRoute('POST', '/api/v1/runs/:id/start', 'run', (_ctx, run, me) => {
+  runRoute('POST', '/api/v1/runs/:id/start', 'view', (_ctx, run, me) => {
+    // A restore starts with the restore permission, a deploy with run.
+    if (!can(me, run.kind === 'restore' ? 'restore' : 'run', runTarget(run))) {
+      return forbiddenResponse()
+    }
     if (run.state !== 'planned') {
       return wrongState('start', run)
     }

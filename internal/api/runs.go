@@ -50,6 +50,8 @@ func (s *server) runRoutes() []routeDef {
 		{"GET /api/v1/runs/{id}/events", auth.View, s.streamEvents},
 		{"POST /api/v1/runs/{id}/start", auth.View, s.startRun},
 		{"POST /api/v1/runs/{id}/cancel", auth.View, s.cancelRun},
+		{"POST /api/v1/runs/{id}/restore", auth.View, s.restoreRun},
+		{"POST /api/v1/runs/{id}/rerun-failed", auth.View, s.rerunFailed},
 		{"GET /api/v1/approvals", auth.View, s.listApprovals},
 		{"POST /api/v1/runs/{id}/approve", auth.View, s.approveRun},
 		{"POST /api/v1/runs/{id}/reject", auth.View, s.rejectRun},
@@ -126,18 +128,20 @@ type runStateView struct {
 }
 
 type runSummaryView struct {
-	ID             int64      `json:"id"`
-	Kind           string     `json:"kind"`
-	JobSourceID    int64      `json:"job_source_id"`
-	JobID          string     `json:"job_id"`
-	Environment    string     `json:"environment"`
-	Label          string     `json:"label"`
-	State          string     `json:"state"`
-	WaitReason     string     `json:"wait_reason"`
-	EndReason      string     `json:"end_reason"`
-	ManifestID     string     `json:"manifest_id"`
-	RequestedBy    int64      `json:"requested_by"`
-	Via            string     `json:"via"`
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	JobSourceID int64  `json:"job_source_id"`
+	JobID       string `json:"job_id"`
+	Environment string `json:"environment"`
+	Label       string `json:"label"`
+	State       string `json:"state"`
+	WaitReason  string `json:"wait_reason"`
+	EndReason   string `json:"end_reason"`
+	ManifestID  string `json:"manifest_id"`
+	RequestedBy int64  `json:"requested_by"`
+	Via         string `json:"via"`
+	// RestoreOf is the run a restore restores; null for any other run.
+	RestoreOf      *int64     `json:"restore_of"`
 	CreatedAt      time.Time  `json:"created_at"`
 	StateChangedAt time.Time  `json:"state_changed_at"`
 	StartedAt      *time.Time `json:"started_at"`
@@ -159,10 +163,14 @@ type runDetailView struct {
 }
 
 func summarizeRun(r store.Run) runSummaryView {
+	var restoreOf *int64
+	if r.Kind == "restore" {
+		restoreOf = r.ParentRunID
+	}
 	return runSummaryView{
 		ID: r.ID, Kind: r.Kind, JobSourceID: r.JobSourceID, JobID: r.JobID, Environment: r.Environment, Label: r.Label,
 		State: r.State, WaitReason: r.WaitReason, EndReason: r.EndReason, ManifestID: r.ManifestID,
-		RequestedBy: r.RequestedBy, Via: r.Via, CreatedAt: r.CreatedAt, StateChangedAt: r.StateChangedAt,
+		RequestedBy: r.RequestedBy, Via: r.Via, RestoreOf: restoreOf, CreatedAt: r.CreatedAt, StateChangedAt: r.StateChangedAt,
 		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 	}
 }
@@ -386,16 +394,20 @@ func (s *server) createRun(w http.ResponseWriter, r *http.Request) {
 	for group, choice := range req.Selection {
 		selection[group] = engine.GroupSelection{Version: choice.Version, Services: choice.Services}
 	}
-	via := "web"
-	if principal.Via == viaToken {
-		via = "cli"
-	}
-	run, err := s.Runs.Create(r.Context(), principal, jobID, req.Environment, selection, via, req.Start)
+	run, err := s.Runs.Create(r.Context(), principal, jobID, req.Environment, selection, viaOf(principal), req.Start)
 	if err != nil {
 		s.engineError(w, r, err)
 		return
 	}
 	s.respondRun(w, r, run.ID, http.StatusCreated)
+}
+
+// viaOf is how a run was asked for: "cli" for a token, "web" for a session.
+func viaOf(p auth.Principal) string {
+	if p.Via == viaToken {
+		return "cli"
+	}
+	return "web"
 }
 
 // doRunAction runs an engine action on the run of the path and answers with

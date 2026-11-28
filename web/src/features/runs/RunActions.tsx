@@ -46,6 +46,8 @@ export function RunActions({ run, reload }: RunActionsProps) {
   const mayRun = can('run', target)
   const mayCancel = can('cancel', target)
   const mayRestore = can('restore', target)
+  // Starting a restore run needs restore; every other run needs run. The plan and the Start button both follow this.
+  const mayStart = run.kind === 'restore' ? mayRestore : mayRun
   // Whether this viewer may decide the run, and why not, is the /approvals row of this run; no row, no buttons.
   const mayAsk = run.state === 'waiting_approval' && can('approve', target)
   const approvals = useApprovals({ enabled: mayAsk })
@@ -54,9 +56,9 @@ export function RunActions({ run, reload }: RunActionsProps) {
 
   // Start waits for the plan: it is hidden until the plan has loaded and while any of its checks failed.
   // Approve and Reject wait for it too (they stay disabled), and Approve names the plan the person was shown.
-  const plan = useRunPlan(run.id, { enabled: (run.state === 'planned' && mayRun) || (run.state === 'waiting_approval' && mayApprove) })
+  const plan = useRunPlan(run.id, { enabled: (run.state === 'planned' && mayStart) || (run.state === 'waiting_approval' && mayApprove) })
   const planReady = plan.isSuccess && failedChecks(plan.data).length === 0
-  const planFailed = (run.state === 'planned' && mayRun && plan.isError) || (run.state === 'waiting_approval' && mayApprove && plan.isError)
+  const planFailed = (run.state === 'planned' && mayStart && plan.isError) || (run.state === 'waiting_approval' && mayApprove && plan.isError)
 
   const start = useStartRun(run.id)
   const cancel = useCancelRun(run.id)
@@ -98,7 +100,7 @@ export function RunActions({ run, reload }: RunActionsProps) {
   const buttons: { name: string; variant?: 'primary' | 'danger'; disabled?: boolean; onClick(): void }[] = []
   const state = run.state
   if (state === 'planned') {
-    if (mayRun && planReady) buttons.push({ name: 'Start', variant: 'primary', onClick: askOrStart })
+    if (mayStart && planReady) buttons.push({ name: 'Start', variant: 'primary', onClick: askOrStart })
     if (mayCancel) buttons.push({ name: 'Discard', onClick: () => setConfirming('discard') })
   }
   if (state === 'waiting_approval' && mayApprove) {

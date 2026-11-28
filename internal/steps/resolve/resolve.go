@@ -81,6 +81,9 @@ type Deps struct {
 	// Inventory returns the inventory snapshot a run was planned against, by
 	// id (store.SnapshotByID), not the active one.
 	Inventory func(ctx context.Context, snapshotID int64) (spec.Inventory, error)
+	// SourceRun returns a run by id (store.GetRun). A restore run reads the plan
+	// of the run it restores through it.
+	SourceRun func(ctx context.Context, runID int64) (store.Run, error)
 	// Options are the deployment-wide AWS settings (emulator endpoint); they
 	// decide how ECR repository URIs are parsed and S3 is addressed.
 	Options awsx.Options
@@ -109,6 +112,9 @@ func New(d Deps) runner.Executor {
 type target struct {
 	name, group, version string
 	env                  spec.ServiceEnv
+	// restore is set for a service of a restore run: what the run it
+	// restores recorded about it. Nil for a deploy.
+	restore *restoreOf
 }
 
 // Execute resolves the run's selection into a manifest. See the package comment.
@@ -117,15 +123,25 @@ func (x *executor) Execute(ctx context.Context, env runner.Env, task queue.Claim
 	if env.CancelRequested(ctx) {
 		return queue.Outcome{State: "cancelled"}
 	}
-	inv, err := x.d.Inventory(ctx, run.InventorySnapshotID)
-	if err != nil {
-		env.Log("error", fmt.Sprintf("Could not read inventory snapshot %d: %v", run.InventorySnapshotID, err))
-		return failed("could not read the inventory snapshot", err.Error())
-	}
-	targets, err := targetsOf(run.Selection, inv, run.Environment)
-	if err != nil {
-		env.Log("error", "Could not work out the services of the run: "+err.Error())
-		return failed("the run's selection does not match its inventory snapshot", err.Error())
+	var targets []target
+	var header restoreHeader // set for a restore
+	if run.Kind == "restore" {
+		var err error
+		if header, targets, err = x.restoreTargets(ctx, run); err != nil {
+			env.Log("error", "Could not work out the services to restore: "+err.Error())
+			return failed("could not work out what to restore", err.Error())
+		}
+	} else {
+		inv, err := x.d.Inventory(ctx, run.InventorySnapshotID)
+		if err != nil {
+			env.Log("error", fmt.Sprintf("Could not read inventory snapshot %d: %v", run.InventorySnapshotID, err))
+			return failed("could not read the inventory snapshot", err.Error())
+		}
+		targets, err = targetsOf(run.Selection, inv, run.Environment)
+		if err != nil {
+			env.Log("error", "Could not work out the services of the run: "+err.Error())
+			return failed("the run's selection does not match its inventory snapshot", err.Error())
+		}
 	}
 	env.Log("info", fmt.Sprintf("Resolving %d services for %s (%s) in account %s.", len(targets), run.Environment, run.Label, run.AWSAccount))
 
@@ -159,6 +175,9 @@ func (x *executor) Execute(ctx context.Context, env runner.Env, task queue.Claim
 		RunID: run.ID, Environment: run.Environment, Label: run.Label, AWSAccount: run.AWSAccount,
 		InventoryCommit: run.InventoryCommit, JobCommit: run.JobCommit,
 		Services: make([]manifest.Service, 0, len(results)), Checks: []manifest.Check{},
+	}
+	if run.Kind == "restore" { // a restore pins what the run it restores was planned against
+		m.RestoreOf, m.InventoryCommit, m.JobCommit = header.run, header.inventoryCommit, header.jobCommit
 	}
 	for _, res := range results {
 		m.Services = append(m.Services, res.service)
@@ -344,6 +363,10 @@ func (r *resolution) resolveService(ctx context.Context, t target) (result servi
 		}
 	}()
 
+	if t.restore != nil {
+		s.restore(ctx)
+		return s.result()
+	}
 	s.checkService(ctx)
 	s.checkImage(ctx)
 	for _, f := range t.env.EnvFiles {
