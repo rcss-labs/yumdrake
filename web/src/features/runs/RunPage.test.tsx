@@ -20,15 +20,6 @@ describe('the run page header', () => {
     expect(within(facts).getByRole('img', { name: /services/ })).toBeInTheDocument()
   })
 
-  it('falls back to the person number when the starter has no name', async () => {
-    storedRun(runIds.partiallySucceeded).requested_by_name = undefined
-    storedRun(runIds.partiallySucceeded).requested_by = 42
-    renderRun(runIds.partiallySucceeded)
-    const facts = (await screen.findByText('Started by')).closest('dl') as HTMLElement
-    expect(within(facts).getByText('user #42')).toBeInTheDocument()
-    expect(within(facts).getByText('via web')).toBeInTheDocument()
-  })
-
   it('says "service" in the singular for a run of one service', async () => {
     const run = storedRun(runIds.partiallySucceeded)
     const failedService = run.legs.find((leg) => leg.state === 'failed')?.service
@@ -147,7 +138,16 @@ describe('what failed', () => {
     expect(within(rows[1]!).getByText('billing')).toBeInTheDocument()
     expect(within(rows[1]!).getByText('copy-config')).toBeInTheDocument()
     expect(within(rows[1]!).getByText(/does not exist \(NoSuchKey\)/)).toBeInTheDocument()
-    expect(within(panel).getByText(/billing: deploy and verify were skipped/)).toBeInTheDocument()
+    expect(within(panel).getByText(/: deploy and verify were skipped/).textContent).toBe('billing: deploy and verify were skipped')
+  })
+
+  it('links the failed service and the service named in the skipped line to its page', async () => {
+    renderRun(runIds.partiallySucceeded)
+    const panel = await screen.findByRole('region', { name: 'What failed' })
+    const links = within(panel).getAllByRole('link', { name: 'billing' })
+    expect(links).toHaveLength(2)
+    for (const link of links) expect(link).toHaveAttribute('href', '/services/billing')
+    expect(within(panel).getByText(/: deploy and verify were skipped/)).toBeInTheDocument()
   })
 
   it('"Show its log" puts the service in the address, which is the console scope', async () => {
@@ -240,6 +240,7 @@ describe('when the log or the live updates fail', () => {
     const note = await screen.findByTestId('live-stopped', undefined, { timeout: 5000 })
     expect(note).toHaveTextContent('Live updates stopped: You may not view this run')
     expect(note).toHaveTextContent('last known state')
+    expect(screen.getAllByText(/Live updates stopped/)).toHaveLength(1)
     expect(screen.getByTestId('run-lead')).toBeInTheDocument()
   })
 })

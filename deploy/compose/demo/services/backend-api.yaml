@@ -1,0 +1,23 @@
+apiVersion: yumdrake/v1
+kind: Service
+name: backend-api
+versions:
+  pattern: '^v?\d+\.\d+\.\d+$'
+  sort: semver
+  limit: 50
+environments:
+  dev:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/dev/backend-api
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/backend-api
+  qa:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/qa/backend-api
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/backend-api
+  staging:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/staging/backend-api
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/backend-api
+  preprod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/preprod/backend-api
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/backend-api
+  prod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/prod/backend-api
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/backend-api

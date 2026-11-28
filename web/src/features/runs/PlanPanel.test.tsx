@@ -1,8 +1,8 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { Plan, RunDetail } from '../../api/types'
 import { runIds } from '../../test/fixtures'
-import { mockState } from '../../test/server'
+import { delayNext, failNext, mockState, requests } from '../../test/server'
 import { renderApp } from '../../test/render'
 import { PlanPanel } from './PlanPanel'
 
@@ -177,5 +177,17 @@ describe('PlanPanel after the run has failed its preflight', () => {
     run.state = 'failed'
     renderApp(<PlanPanel run={run} />)
     expect(await screen.findByText('This run cannot start.')).toBeVisible()
+  })
+
+  it('shows the plan when the run left resolving while the first plan request was still in flight', async () => {
+    const run = { ...runOf(runIds.planned), state: 'resolving' as const }
+    // The first request was answered "not planned yet" a moment before the plan existed; it is slow to arrive.
+    delayNext('GET', `/api/v1/runs/${run.id}/plan`, 200)
+    failNext('GET', `/api/v1/runs/${run.id}/plan`, 404, 'not_found', 'plan not found')
+    const { rerender } = renderApp(<PlanPanel run={run} />)
+    await waitFor(() => expect(requests.some((request) => request.path.endsWith('/plan'))).toBe(true))
+    // The state event arrives while that request is pending.
+    act(() => rerender(<PlanPanel run={{ ...run, state: 'planned' }} />))
+    expect(await screen.findByRole('table', { name: /plan/i })).toBeInTheDocument()
   })
 })

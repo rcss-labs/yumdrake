@@ -23,7 +23,9 @@ import (
 
 type sseEvent struct {
 	Name, ID, Data string
-	Comment        bool
+	// KeepAlive is set for the server's `event: ping` frames. A comment line is not one: browsers never show
+	// comments to a page, so the keep-alive must be a named event.
+	KeepAlive bool
 }
 
 // sseStream reads a Server-Sent Events response in the background.
@@ -60,11 +62,12 @@ func (f *runFixture) openStream(server *httptest.Server, token, path string, hea
 			switch {
 			case line == "":
 				if cur.Name != "" || cur.Data != "" {
+					cur.KeepAlive = cur.Name == "ping"
 					s.events <- cur
 				}
 				cur = sseEvent{}
 			case strings.HasPrefix(line, ":"):
-				s.events <- sseEvent{Comment: true, Data: strings.TrimSpace(line[1:])}
+				s.events <- sseEvent{Name: "comment", Data: strings.TrimSpace(line[1:])}
 			case strings.HasPrefix(line, "event: "):
 				cur.Name = line[len("event: "):]
 			case strings.HasPrefix(line, "id: "):
@@ -102,7 +105,7 @@ func (s *sseStream) nextNamed(t *testing.T, timeout time.Duration) sseEvent {
 		if !ok {
 			t.Fatalf("stream ended or stalled while waiting for an event")
 		}
-		if !e.Comment {
+		if !e.KeepAlive {
 			return e
 		}
 	}
@@ -178,32 +181,47 @@ func TestEventsSendStateThenLogsThenEnd(t *testing.T) {
 			seen[fmt.Sprintf("%d/%d", l.LegID, l.Seq)] = true
 		}
 	}
-	// Idle: a keep-alive comment arrives, no event does.
-	gotComment := false
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && !gotComment; {
+	// Idle: only `event: ping` with an empty object arrives (a comment would never reach a browser page).
+	gotPing := false
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && !gotPing; {
 		e, ok := stream.next(200 * time.Millisecond)
-		if ok && !e.Comment {
-			t.Fatalf("event %q while idle, want only keep-alive comments", e.Name)
+		if ok && !e.KeepAlive {
+			t.Fatalf("event %q while idle, want only ping events", e.Name)
 		}
-		gotComment = ok && e.Comment
+		if ok && e.Data != "{}" {
+			t.Fatalf("ping data = %q, want {}", e.Data)
+		}
+		gotPing = ok && e.KeepAlive
 	}
-	if !gotComment {
-		t.Error("no keep-alive comment on an idle stream")
+	if !gotPing {
+		t.Error("no ping event on an idle stream")
 	}
 
+	// A state change is sent before the lines that follow it.
+	f.setRun(id, "cancelling")
+	change := stream.nextNamed(t, 3*time.Second)
+	if change.Name != "state" || !strings.Contains(change.Data, `"cancelling"`) {
+		t.Fatalf("event after the state changed = %q %s, want the state event first", change.Name, change.Data)
+	}
+	// The line and the final state are separate commits, so the stream may send the line before the
+	// final state; only the end is fixed: after the final state and after every line.
 	f.addLines(id, store.LogLine{LegID: leg, Seq: 3, Text: "last line"})
 	f.setRun(id, "succeeded")
 	var names []string
 	var lines []string
+	finalStateAt := -1
 	for {
 		e, ok := stream.next(3 * time.Second)
 		if !ok {
 			break
 		}
-		if e.Comment {
+		if e.KeepAlive {
 			continue
 		}
 		names = append(names, e.Name)
+		if e.Name == "state" && strings.Contains(e.Data, `"succeeded"`) {
+			finalStateAt = len(names) - 1
+		}
 		if e.Name == "log" {
 			var b logBatch
 			_ = json.Unmarshal([]byte(e.Data), &b)
@@ -212,8 +230,8 @@ func TestEventsSendStateThenLogsThenEnd(t *testing.T) {
 			}
 		}
 	}
-	if len(names) < 3 || names[0] != "state" || names[len(names)-1] != "end" {
-		t.Fatalf("events after the run finished = %v, want state, log..., end and then the stream closes", names)
+	if len(names) < 3 || names[len(names)-1] != "end" || finalStateAt < 0 || finalStateAt > len(names)-2 {
+		t.Fatalf("events after the run finished = %v, want the final state and the log in either order, then end and then the stream closes", names)
 	}
 	if fmt.Sprint(lines) != "[last line]" {
 		t.Errorf("lines after finishing = %v, want the last line exactly once", lines)
@@ -286,7 +304,7 @@ func TestEventsResumeWithLastEventIDHasNoGapAndNoDuplicate(t *testing.T) {
 			break
 		}
 		switch {
-		case e.Comment:
+		case e.KeepAlive:
 		case e.Name == "log":
 			collect(e)
 		case e.Name == "end":
@@ -334,7 +352,7 @@ func TestEventsWithoutViewLogsCarryNoLogEvents(t *testing.T) {
 			if !ok {
 				break
 			}
-			if !e.Comment {
+			if !e.KeepAlive {
 				names = append(names, e.Name)
 				if strings.Contains(e.Data, "secret-looking detail") {
 					t.Errorf("%s: an event carries log text", name)
@@ -353,7 +371,7 @@ func TestEventsWithoutViewLogsCarryNoLogEvents(t *testing.T) {
 		if !ok {
 			break
 		}
-		if !e.Comment {
+		if !e.KeepAlive {
 			names = append(names, e.Name)
 		}
 	}

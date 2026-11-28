@@ -150,7 +150,9 @@ func (f *fakes) resolve(ctx context.Context, env runner.Env, task queue.Claimed)
 			if version == "" {
 				version = selection[g].Version
 			}
-			services = append(services, manifest.Service{Name: s, Group: g, Version: version, Config: []manifest.ConfigItem{}})
+			// A previous task definition gives the service page a restore source.
+			services = append(services, manifest.Service{Name: s, Group: g, Version: version, Config: []manifest.ConfigItem{},
+				PreviousTaskDefinition: fmt.Sprintf("arn:aws:ecs:fake:000000000000:task-definition/%s:1", s)})
 			env.Log("info", fmt.Sprintf("selected %s %s in group %s", s, version, g))
 		}
 	}

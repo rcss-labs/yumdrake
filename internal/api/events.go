@@ -136,7 +136,9 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-keepAlive.C:
-			if !send([]byte(": keep-alive\n\n")) {
+			// A named event, not a comment: EventSource never shows comments to the page, so the web
+			// app could not tell a quiet stream from a dead one.
+			if !send(frame("ping", "", []byte("{}"))) {
 				return
 			}
 			continue

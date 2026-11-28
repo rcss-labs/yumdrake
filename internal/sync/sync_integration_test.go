@@ -987,3 +987,45 @@ func TestMissingInventoryDirectoryIsAProblemNotASourceError(t *testing.T) {
 		t.Fatalf("unexpected status: %+v", st)
 	}
 }
+
+func TestSyncFailureIsRecorded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.firstSync()
+	h.addJob(jobPath2)
+	h.src.put(jobsRepo, "j1", jobPath2, fixture(t, "jobs/deploy-backend.yaml"))
+	h.tick()
+	if err := h.syncAll(); err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	failures := func() int {
+		t.Helper()
+		n, err := store.CountEvents(context.Background(), h.pool, "sync_failed", time.Time{})
+		if err != nil {
+			t.Fatalf("CountEvents: %v", err)
+		}
+		return n
+	}
+	if n := failures(); n != 0 {
+		t.Fatalf("sync_failed events after successful syncs = %d, want 0", n)
+	}
+
+	h.src.setErr(errors.New("github: 502 bad gateway"))
+	h.tick()
+	if err := h.syncAll(); err == nil {
+		t.Fatal("SyncAll with a failing source returned no error")
+	}
+	// One for the inventory and one for each job source (the first sync's job and this one).
+	if want := 1 + len(h.jobIDs); failures() != want {
+		t.Fatalf("sync_failed events = %d, want %d (the inventory and every job)", failures(), want)
+	}
+
+	h.src.setErr(nil)
+	h.tick()
+	if err := h.syncAll(); err != nil {
+		t.Fatalf("SyncAll after recovery: %v", err)
+	}
+	if want := 1 + len(h.jobIDs); failures() != want {
+		t.Fatalf("sync_failed events after recovery = %d, want still %d", failures(), want)
+	}
+}

@@ -5,6 +5,7 @@ import { AWSAccountsSection } from './AWSAccountsSection'
 import { FreezesSection } from './FreezesSection'
 import { GitHubSection } from './GitHubSection'
 import { GroupsSection } from './GroupsSection'
+import { HealthPage } from '../health/HealthPage'
 import { SlackSection } from './SlackSection'
 import { SourcesSection } from './SourcesSection'
 import { SSOSection } from './SSOSection'
@@ -29,5 +30,6 @@ export const adminSections: readonly AdminSection[] = [
   { slug: 'github', label: 'GitHub', action: 'manage_connections', component: GitHubSection },
   { slug: 'sources', label: 'Git sources', action: 'manage_connections', component: SourcesSection },
   { slug: 'slack', label: 'Slack', action: 'manage_connections', component: SlackSection },
+  { slug: 'health', label: 'System health', action: 'manage_connections', component: HealthPage },
   { slug: 'audit', label: 'Audit log', action: 'view_audit', component: AuditSection },
 ]

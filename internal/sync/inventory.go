@@ -50,6 +50,7 @@ func (e *Engine) syncInventory(ctx context.Context) error {
 		e.recordSyncError(ctx, what, err, func(message string, at time.Time) error {
 			return store.SetInventorySyncError(ctx, e.pool, message, at)
 		})
+		e.recordGitHubCheck(ctx, src.Repo, err)
 		return e.sourceError(what, err, append(attrs, "repo", src.Repo)...)
 	}
 	// SourceFor errors are stored and shown to users as they are: the
@@ -62,6 +63,7 @@ func (e *Engine) syncInventory(ctx context.Context) error {
 	if err != nil {
 		return fail("read inventory branch head", err, "branch", src.Branch)
 	}
+	e.recordGitHubCheck(ctx, src.Repo, nil)
 	if err := store.ClearInventorySyncError(ctx, e.pool); err != nil {
 		return err
 	}

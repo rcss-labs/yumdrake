@@ -63,7 +63,7 @@ func (b *bodyClient) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(b.body()), Header: h, ContentLength: b.contentLength}, nil
 }
 
-func stubStore(hc aws.HTTPClient) *artifacts.Store {
+func stubStore(hc aws.HTTPClient) *artifacts.S3Store {
 	client := s3.New(s3.Options{
 		Region: "us-east-1", HTTPClient: hc, UsePathStyle: true,
 		Credentials:  credentials.NewStaticCredentialsProvider("a", "b", ""),

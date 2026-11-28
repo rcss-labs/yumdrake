@@ -635,15 +635,15 @@ export interface RunSummaryCounts {
   failures: RunFailure[]
 }
 
-/** One service of a run row (assumed: only on list rows). */
+/** One service of a run row (list rows only). */
 export interface RunServiceChip {
   service: string
   version: string
   state: LegState
 }
 
-/** GET /api/v1/runs rows. */
-export interface RunSummary {
+/** What a run row and the run detail share. */
+export interface RunBase {
   id: number
   kind: RunKind
   job_source_id: number
@@ -660,16 +660,20 @@ export interface RunSummary {
   state_changed_at: string
   started_at: string | null
   finished_at: string | null
-  /** Assumed: the job's title. */
-  job_name?: string
-  /** Assumed: who asked. */
-  requested_by_name?: string
+  /** The job source's title; "" when it has none. */
+  job_name: string
+  /** Who asked: their name, else their email. */
+  requested_by_name: string
   /** Assumed: for a restore run, the run it undoes. */
   restore_of?: number | null
-  /** Assumed (list rows only): the services the run changes and where each stands. */
-  services?: RunServiceChip[]
-  /** Assumed (list rows only): the same shape as the detail's summary. */
-  summary?: RunSummaryCounts
+}
+
+/** GET /api/v1/runs rows. */
+export interface RunSummary extends RunBase {
+  /** One entry per service of the run's step legs, in order of first appearance, and where it stands. */
+  services: RunServiceChip[]
+  /** The same shape as the detail's summary. */
+  summary: RunSummaryCounts
 }
 
 /** The group choice of a run: the same shape as the body of POST /jobs/{id}/runs. */
@@ -698,7 +702,7 @@ export interface Approval {
 }
 
 /** GET /api/v1/runs/{id}, and the answer of every run action. */
-export interface RunDetail extends RunSummary {
+export interface RunDetail extends RunBase {
   aws_account: string
   folder_id: number
   inventory_commit: string
@@ -1005,4 +1009,219 @@ export interface SlackTestResult {
   ok: boolean
   /** Slack's error code when ok is false (for example "channel_not_found"); "" otherwise. */
   code: string
+}
+
+// ---- Overview (Plan 9) -------------------------------------------------------
+
+export interface OverviewDay {
+  /** "2026-11-28". */
+  date: string
+  succeeded: number
+  /** Includes partly succeeded runs. */
+  failed: number
+  /** Cancelled and invalidated runs. */
+  other: number
+}
+
+export interface OverviewFailingService {
+  service: string
+  failures: number
+  common_reason: string
+}
+
+export interface OverviewAttention {
+  run_id: number
+  state: RunState
+  job: string
+  environment: string
+  label: string
+  reason: string
+  by: string
+  at: string
+}
+
+export interface OverviewEnvironment {
+  environment: string
+  label: string
+  run_id: number | null
+  state: RunState
+  job: string
+  at: string | null
+}
+
+/** GET /api/v1/analytics/overview?label=&days=. */
+export interface Overview {
+  from: string
+  to: string
+  runs: number
+  prev_runs: number
+  /** 0..1, null when no run finished in the period. */
+  success_rate: number | null
+  prev_success_rate: number | null
+  median_duration_seconds: number | null
+  prev_median_duration_seconds: number | null
+  waiting_approval: number
+  oldest_waiting: string | null
+  days: OverviewDay[]
+  top_failing: OverviewFailingService[]
+  attention: OverviewAttention[]
+  environments: OverviewEnvironment[]
+}
+
+// ---- Running versions and the service page (Plan 9) -----------------------------
+
+/** One service in one environment, as read from ECS. */
+export interface RunningCell {
+  state: 'ok' | 'error' | 'absent'
+  /** "" when ECS runs it but no version could be worked out. */
+  version: string
+  /** "family:revision". */
+  task_definition: string
+  /** False when no Yumdrake run deployed what is running. */
+  by_yumdrake: boolean
+  /** The run that deployed it; 0 when by_yumdrake is false. */
+  run_id: number
+  last_deploy_failed: boolean
+  /** Another environment with the same label runs a newer version. */
+  behind: boolean
+  /** The AWS error code when state is "error", otherwise "". */
+  error: string
+  read_at: string
+}
+
+export interface RunningRow {
+  service: string
+  /** One cell per environment of the matrix, in the same order. */
+  cells: RunningCell[]
+}
+
+/** GET /api/v1/versions/running (?refresh=1 reads ECS again; needs manage_connections). */
+export interface RunningMatrix {
+  environments: EnvironmentSummary[]
+  rows: RunningRow[]
+}
+
+export interface ServiceEnvironmentRunning {
+  environment: string
+  label: string
+  cell: RunningCell
+  /** The run a restore of this service in this environment would start from, if any. */
+  restore_from_run_id: number | null
+  /** The folder of that run, for a folder-scoped restore grant; null with restore_from_run_id. */
+  restore_from_folder_id: number | null
+}
+
+export interface ServiceDeployment {
+  run_id: number
+  leg_id: number
+  environment: string
+  version: string
+  state: LegState
+  at: string
+  by: string
+}
+
+export interface ServiceConfigItem {
+  kind: string
+  name: string
+  destination: string
+  /** The first 12 characters. */
+  checksum: string
+}
+
+export interface ServiceConfigChange {
+  run_id: number
+  environment: string
+  at: string
+  items: ServiceConfigItem[]
+}
+
+/** GET /api/v1/services/{name}. */
+export interface ServicePage {
+  service: Service
+  environments: ServiceEnvironmentRunning[]
+  deployments: ServiceDeployment[]
+  config: ServiceConfigChange[]
+}
+
+export interface QueueRun {
+  id: number
+  job_id: string
+  job_name: string
+  environment: string
+  label: string
+  state: RunState
+  /** In words, for example "waiting for run #41". */
+  wait_reason: string
+  /** Parsed from a wait reason of the form "waiting for run #N". */
+  blocked_by_run_id: number | null
+  waiting_since: string
+  waited_seconds: number
+  legs_running: number
+  legs_queued: number
+}
+
+export interface QueueLock {
+  resource: string
+  run_id: number
+  acquired_at: string
+}
+
+export interface RunnerInfo {
+  id: string
+  version: string
+  concurrency: number
+  busy: number
+  started_at: string
+  last_seen_at: string
+}
+
+/** GET /api/v1/queue. */
+export interface QueueView {
+  runs: QueueRun[]
+  locks: QueueLock[]
+  runners: RunnerInfo[]
+  free_slots: number
+  queued_legs: number
+  oldest_queued_at: string | null
+  runner_gone_after_seconds: number
+}
+
+export interface SyncStatus {
+  checked_at: string | null
+  error: string
+  error_at: string | null
+}
+
+export interface SyncJobStatus extends SyncStatus {
+  id: number
+  job_id: string
+  title: string
+}
+
+export interface ConnectionHealth {
+  kind: 'aws' | 'github' | 'slack'
+  name: string
+  last_ok_at: string | null
+  last_error_at: string | null
+  last_error_code: string
+  failing: boolean
+}
+
+export interface HealthCounter {
+  hour: number
+  day: number
+}
+
+/** GET /api/v1/system/health (needs manage_connections). */
+export interface SystemHealth {
+  /** Plain-words problems, in order; empty when healthy. */
+  problems: string[]
+  runners: RunnerInfo[]
+  runner_gone_after_seconds: number
+  queue: { queued_legs: number; oldest_queued_at: string | null; active_runs: number }
+  counters: { lease_expired: HealthCounter; log_persist_failed: HealthCounter; sync_failed: HealthCounter }
+  sync: { inventory: SyncStatus; jobs: SyncJobStatus[] }
+  connections: ConnectionHealth[]
+  notifications: { pending: number; failed_last_day: number; oldest_pending_at: string | null }
 }

@@ -5,6 +5,11 @@
   color: var(--ink2);
   font-size: 13px;
 }
+.ui-note[data-tone='success'] {
+  background: var(--ok-b);
+  color: var(--ok-t);
+  font-size: 14px;
+}
 .ui-note[data-tone='warning'] {
   background: var(--wait-b);
   color: var(--wait-t);

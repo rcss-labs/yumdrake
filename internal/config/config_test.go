@@ -705,6 +705,24 @@ func TestOrchestratorEngineSettings(t *testing.T) {
 	}
 }
 
+func TestOrchestratorRunnerGoneAfter(t *testing.T) {
+	cfg, err := LoadOrchestrator(envFrom(requiredEnv()))
+	if err != nil || cfg.RunnerGoneAfter != 2*time.Minute {
+		t.Fatalf("default = %v, %v; want 2m", cfg.RunnerGoneAfter, err)
+	}
+	env := requiredEnv()
+	env["YUMDRAKE_RUNNER_GONE_AFTER"] = "45s"
+	if cfg, err = LoadOrchestrator(envFrom(env)); err != nil || cfg.RunnerGoneAfter != 45*time.Second {
+		t.Fatalf("override = %v, %v; want 45s", cfg.RunnerGoneAfter, err)
+	}
+	for _, bad := range []string{"0s", "soon"} {
+		env["YUMDRAKE_RUNNER_GONE_AFTER"] = bad
+		if _, err := LoadOrchestrator(envFrom(env)); err == nil || !strings.Contains(err.Error(), "YUMDRAKE_RUNNER_GONE_AFTER") {
+			t.Errorf("YUMDRAKE_RUNNER_GONE_AFTER=%s: error = %v, want one naming the variable", bad, err)
+		}
+	}
+}
+
 func TestRunnerReadsTheKeyPrefix(t *testing.T) {
 	env := requiredEnv()
 	env["YUMDRAKE_VALKEY_KEY_PREFIX"] = "blue:"

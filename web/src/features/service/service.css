@@ -1,0 +1,75 @@
+.svc-facts {
+  margin-bottom: 16px;
+}
+.svc-envs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.svc-env {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.svc-env-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.svc-version {
+  margin: 4px 0 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.svc-markers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.svc-line,
+.svc-muted {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink3);
+}
+.svc-error {
+  margin: 0;
+  color: var(--bad-t);
+}
+.svc-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+}
+.svc-section {
+  margin-bottom: 16px;
+}
+.svc-title {
+  margin: 0;
+  padding: 20px 20px 12px;
+  font-size: 15px;
+  font-weight: 500;
+}
+.svc-title-bare {
+  padding: 0 0 12px;
+}
+.svc-empty {
+  margin: 0;
+  padding: 16px 20px 24px;
+  color: var(--ink3);
+}
+.svc-nowrap {
+  white-space: nowrap;
+}

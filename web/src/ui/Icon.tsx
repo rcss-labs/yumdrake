@@ -7,6 +7,7 @@ export type IconName =
   | 'jobs'
   | 'runs'
   | 'approvals'
+  | 'queue'
   | 'versions'
   | 'inventory'
   | 'cli'
@@ -36,6 +37,7 @@ const drawings: Record<IconName, ReactNode> = {
       <path d="m9 12 2 2 4-4" />
     </>
   ),
+  queue: <path d="M4 6h16M4 12h10M4 18h6" />,
   versions: (
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" />

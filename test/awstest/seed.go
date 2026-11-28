@@ -270,3 +270,38 @@ func (a *Account) cleanupCluster(client *ecs.Client, cluster, service string) {
 		removeContainers(containerIDs("label=io.floci.service=ecs", "label=io.floci.account="+a.ID))
 	}
 }
+
+// Redeploy registers a new revision of the service's task definition family
+// (family = service name, as Service creates it) running image, with the given
+// task definition tags, and points the service at it. It does not wait for the
+// rollout: ECS reports the new task definition on the service at once. It
+// returns the new task definition ARN.
+func (a *Account) Redeploy(region, cluster, service, image string, tags map[string]string) (taskDefARN string) {
+	a.w.t.Helper()
+	ctx := context.Background()
+	client := ecs.NewFromConfig(a.AWSConfig(region))
+	var ecsTags []ecstypes.Tag
+	for key, value := range tags {
+		ecsTags = append(ecsTags, ecstypes.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+	td, err := client.RegisterTaskDefinition(ctx, &ecs.RegisterTaskDefinitionInput{
+		Family:                  aws.String(service),
+		NetworkMode:             ecstypes.NetworkModeAwsvpc,
+		RequiresCompatibilities: []ecstypes.Compatibility{ecstypes.CompatibilityFargate},
+		Cpu:                     aws.String("256"),
+		Memory:                  aws.String("512"),
+		ContainerDefinitions: []ecstypes.ContainerDefinition{{
+			Name: aws.String("app"), Image: aws.String(image), Essential: aws.Bool(true),
+		}},
+		Tags: ecsTags,
+	})
+	if err != nil || td.TaskDefinition == nil {
+		a.w.t.Fatalf("awstest: RegisterTaskDefinition %s: %v", service, err)
+	}
+	if _, err := client.UpdateService(ctx, &ecs.UpdateServiceInput{
+		Cluster: aws.String(cluster), Service: aws.String(service), TaskDefinition: td.TaskDefinition.TaskDefinitionArn,
+	}); err != nil {
+		a.w.t.Fatalf("awstest: UpdateService %s/%s: %v", cluster, service, err)
+	}
+	return aws.ToString(td.TaskDefinition.TaskDefinitionArn)
+}

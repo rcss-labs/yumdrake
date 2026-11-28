@@ -59,6 +59,8 @@ type ready struct {
 	BaseURL  string `json:"base_url"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// RunnerPID lets the browser test pause and resume the runner process.
+	RunnerPID int `json:"runner_pid"`
 }
 
 func main() {
@@ -215,6 +217,11 @@ func bringUp(ctx context.Context, cleanup *cleaner, binary, runnerBinary, fixtur
 		"YUMDRAKE_SYNC_INTERVAL=10s",
 		"YUMDRAKE_GITHUB_API_URL="+gh.URL(),
 		"YUMDRAKE_LOG_LEVEL=warn",
+		// No request may reach real AWS: the running versions and connection checks the screens trigger go
+		// to a local port nothing listens on (the discard port) and fail at once.
+		"YUMDRAKE_AWS_ENDPOINT_URL=http://127.0.0.1:9",
+		// The visibility spec stops the runner and expects System health to say so within seconds.
+		"YUMDRAKE_RUNNER_GONE_AFTER=5s",
 	)
 
 	// The service migrates the empty database on start.
@@ -330,7 +337,7 @@ func bringUp(ctx context.Context, cleanup *cleaner, binary, runnerBinary, fixtur
 	}); err != nil {
 		return ready{}, err
 	}
-	return ready{BaseURL: base, Email: adminEmail, Password: password}, nil
+	return ready{BaseURL: base, Email: adminEmail, Password: password, RunnerPID: runnerCmd.Process.Pid}, nil
 }
 
 func createDatabase(ctx context.Context, cleanup *cleaner, adminURL, name string) (string, error) {

@@ -1,12 +1,17 @@
-import { render, screen, within } from '@testing-library/react'
+import { render as renderBare, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ReactElement } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { LogLine, RunDetail } from '../../api/types'
 import { mockState, runIds } from '../../test/server'
 import { StepsTree } from './StepsTree'
 import { wholeRun } from './scope'
 
-const runOf = (id: number): RunDetail => {
+// The tree links service names to their pages, so it needs a router.
+const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>)
+
+const runOf =(id: number): RunDetail => {
   const run = mockState().runs.find((candidate) => candidate.id === id)
   if (!run) throw new Error('no such run')
   return run
@@ -36,6 +41,13 @@ describe('StepsTree', () => {
     expect(buttons[start + 1]).toHaveTextContent(/^billing/)
     expect(buttons[start + 2]).toHaveTextContent(/^backend-api/)
     expect(buttons[start + 1]).toHaveTextContent('Failed')
+  })
+
+  it('links each service to its page, next to its button and without changing the button', () => {
+    render(<StepsTree run={runOf(runIds.partiallySucceeded)} lines={[]} scope={wholeRun} onSelect={() => {}} />)
+    const link = screen.getAllByRole('link', { name: 'billing service page' })[0]!
+    expect(link).toHaveAttribute('href', '/services/billing')
+    expect(link.closest('button')).toBeNull()
   })
 
   it('puts an unknown service above the others too', () => {

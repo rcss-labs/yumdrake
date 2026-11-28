@@ -209,6 +209,7 @@ func (s *Sender) deliver(ctx context.Context, token string, n store.Notification
 		// The post happened, so the sent mark is written even if shutdown began during it.
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownWriteTimeout)
 		defer cancel()
+		s.recordSlackOK(markCtx)
 		return s.record(markCtx, n, store.MarkNotificationSent(markCtx, s.pool, n.ID, s.now()), deliveryResultSent)
 	}
 	if ctx.Err() != nil {
@@ -234,14 +235,17 @@ func (s *Sender) deliver(ctx context.Context, token string, n store.Notification
 			return s.record(ctx, n, store.DeferNotification(ctx, s.pool, n.ID, s.now().Add(wait)), deliveryResultRateLimited)
 		case tokenFaultCodes[code]:
 			s.log.Error("slack refused the token; sending is paused until a new token is stored", "error", code)
+			s.recordSlackError(ctx, code)
 			return s.record(ctx, n, store.DeferNotification(ctx, s.pool, n.ID, s.now()), deliveryResultTokenRefused)
 		}
 	}
 	attempt := n.Attempts + 1
 	if permanent || attempt >= maxAttempts {
 		s.log.Warn("notification given up", "id", n.ID, "run_id", n.RunID, "kind", n.Kind, "attempts", attempt, "error", code)
+		s.recordSlackError(ctx, code)
 		return s.record(ctx, n, store.MarkNotificationRetry(ctx, s.pool, n.ID, code, s.now(), true), deliveryResultFailed)
 	}
+	s.recordSlackError(ctx, code)
 	wait := max(backoff(attempt), retryAfter)
 	return s.record(ctx, n, store.MarkNotificationRetry(ctx, s.pool, n.ID, code, s.now().Add(wait), false), deliveryResultRetry)
 }
@@ -280,6 +284,20 @@ func (s *Sender) release(ns []store.Notification) {
 		if err := store.DeferNotification(ctx, s.pool, n.ID, s.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.log.Warn("could not release a claimed notification; its lease will run out", "id", n.ID)
 		}
+	}
+}
+
+// recordSlackOK stores that Slack accepted a post. Failing to record is logged only.
+func (s *Sender) recordSlackOK(ctx context.Context) {
+	if err := store.RecordConnectionOK(ctx, s.pool, "slack", "slack", s.now()); err != nil {
+		s.log.Warn("could not record connection check", "kind", "slack", "error", err.Error())
+	}
+}
+
+// recordSlackError stores that a post failed, with its safe code. Failing to record is logged only.
+func (s *Sender) recordSlackError(ctx context.Context, code string) {
+	if err := store.RecordConnectionError(ctx, s.pool, "slack", "slack", code, s.now()); err != nil {
+		s.log.Warn("could not record connection check", "kind", "slack", "error", err.Error())
 	}
 }
 

@@ -1,0 +1,28 @@
+.ui-tile {
+  background: Canvas;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 20px;
+  min-width: 0;
+}
+.ui-tile-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink3);
+}
+.ui-tile-value {
+  font-size: 28px;
+  line-height: 36px;
+  font-weight: 500;
+  margin: 4px 0 2px;
+}
+.ui-tile-empty {
+  font-size: 15px;
+  line-height: 36px;
+  color: var(--ink2);
+  margin: 4px 0 2px;
+}
+.ui-tile-comparison {
+  font-size: 13px;
+  color: var(--ink3);
+}

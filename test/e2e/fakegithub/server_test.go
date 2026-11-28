@@ -3,6 +3,7 @@ package fakegithub_test
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"sync"
@@ -207,4 +208,26 @@ func TestRequestCountersAndConcurrency(t *testing.T) {
 	if n := srv.Requests(fakegithub.EndpointTrees); n != 0 {
 		t.Errorf("trees requests = %d, want 0", n)
 	}
+}
+
+// A caller that owns the listener (the demo) serves the fake itself, with no
+// httptest server started for it.
+func TestHandlerServesWithoutOwnListener(t *testing.T) {
+	srv := fakegithub.NewUnstarted(token)
+	srv.AddCommit(repo, "aaa111", map[string][]byte{"environments.yaml": []byte("x")})
+	srv.SetHead(repo, "main", "aaa111")
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	c, err := github.New(ts.URL, nil, github.Credentials{Method: "token", Token: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.HeadCommit(context.Background(), repo, "main"); err != nil || got != "aaa111" {
+		t.Fatalf("HeadCommit = %q, %v; want aaa111", got, err)
+	}
+	if srv.URL() != "" {
+		t.Errorf("URL() = %q, want empty for an unstarted fake", srv.URL())
+	}
+	srv.Close() // must be safe with nothing started
 }

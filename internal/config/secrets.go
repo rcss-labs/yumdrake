@@ -18,6 +18,20 @@ const (
 	redactedSecretDisplay = "REDACTED"
 )
 
+// DemoSecretKey is the local secret key of the demo setup (deploy/compose).
+// It is PUBLIC: it is committed to the repository, so anything it encrypts is
+// readable by anyone. Both services refuse it unless YUMDRAKE_ENV=dev. It is
+// the base64 of "yumdrake-demo-key-not-a-secret!!".
+const DemoSecretKey = "eXVtZHJha2UtZGVtby1rZXktbm90LWEtc2VjcmV0ISE=" //nolint:gosec // public demo key
+
+func mustDecodeDemoKey() string {
+	key, err := base64.StdEncoding.DecodeString(DemoSecretKey)
+	if err != nil {
+		panic("config: DemoSecretKey is not base64")
+	}
+	return string(key)
+}
+
 // Secret holds a sensitive value. It prints as REDACTED through fmt, slog and
 // JSON, so a configuration struct can be logged without leaking it. Use
 // Reveal where the real value is needed.

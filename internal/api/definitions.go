@@ -114,9 +114,15 @@ func (s *server) getService(w http.ResponseWriter, r *http.Request) {
 		notFound(w, "service")
 		return
 	}
+	writeJSON(w, http.StatusOK, newServiceDetail(service, snapshot))
+}
+
+// newServiceDetail is the view of one inventory entry: the same answer the
+// inventory route and the service page give.
+func newServiceDetail(service spec.Service, snapshot store.Snapshot) serviceDetail {
 	withEmptyLists(reflect.ValueOf(&service))
 	// The text comes from the same snapshot as the parsed service.
-	writeJSON(w, http.StatusOK, serviceDetail{Service: service, Source: snapshot.Sources[service.File]})
+	return serviceDetail{Service: service, Source: snapshot.Sources[service.File]}
 }
 
 // serviceDetail is a service with the text of its file at the active commit

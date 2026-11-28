@@ -1,0 +1,78 @@
+# The demo: an overlay on compose.yaml that builds the images locally, runs the
+# runner with FAKE steps and adds a helper that serves a fake GitHub and fills
+# a fresh Yumdrake with sample data. Nothing real is read or changed.
+#
+#   docker compose -p yumdrake-demo --env-file deploy/compose/demo/demo.env \
+#     -f deploy/compose/compose.yaml -f deploy/compose/compose.demo.yaml up -d --build --wait
+#
+# or `make demo`. See README.md, "Try the demo".
+#
+# NOT YET IN THE DEMO: a local AWS emulator (Floci) with seeded accounts,
+# images, buckets and config files, and real steps against it. They join this
+# file later; until then every deployment step is a fake.
+name: yumdrake-demo
+
+services:
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/orchestrator.Dockerfile
+      args:
+        VERSION: ${VERSION:-demo}
+        COMMIT: ${COMMIT:-unknown}
+    # The demo never listens beyond loopback, whatever YUMDRAKE_HTTP_BIND says,
+    # because it uses public credentials.
+    ports: !override
+      - "127.0.0.1:${YUMDRAKE_HTTP_PORT:-18280}:8080"
+    environment:
+      # dev lets the services accept the public demo key; the orchestrator
+      # refuses dev unless YUMDRAKE_PUBLIC_URL is on localhost or 127.0.0.1.
+      YUMDRAKE_ENV: dev
+      # The fake GitHub served by the demo service.
+      YUMDRAKE_GITHUB_API_URL: http://demo:9000
+      YUMDRAKE_SYNC_INTERVAL: 10s
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/runner.Dockerfile
+      args:
+        VERSION: ${VERSION:-demo}
+        COMMIT: ${COMMIT:-unknown}
+    environment:
+      YUMDRAKE_ENV: dev
+      YUMDRAKE_FAKE_STEPS: "true"
+
+  demo:
+    image: ${YUMDRAKE_IMAGE_REPO}/yumdrake-demo:${YUMDRAKE_VERSION}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/demo.Dockerfile
+    restart: unless-stopped
+    environment:
+      YUMDRAKE_DEMO_LISTEN: ":9000"
+      YUMDRAKE_DEMO_ORCHESTRATOR_URL: http://orchestrator:8080
+      YUMDRAKE_PUBLIC_URL: ${YUMDRAKE_PUBLIC_URL}
+      YUMDRAKE_DATABASE_URL: postgres://yumdrake@postgres:5432/yumdrake?sslmode=disable
+      PGPASSWORD: ${YUMDRAKE_DATABASE_PASSWORD}
+    # No published port: only the orchestrator (the fake GitHub) talks to it.
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/yumdrake-demo", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m

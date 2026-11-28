@@ -144,15 +144,19 @@ func MarkNotificationSent(ctx context.Context, db DBTX, id int64, at time.Time) 
 // releases the claim. With failed false the message stays pending and is tried
 // again at next; with failed true it is given up on (state "failed") and no
 // longer holds back later messages of its run. ErrNotFound for an unknown id
-// or a message that is no longer pending.
+// or a message that is no longer pending. A given-up message gets failed_at =
+// next, so pass the current time as next when failed is true.
 func MarkNotificationRetry(ctx context.Context, db DBTX, id int64, lastError string, next time.Time, failed bool) error {
 	state := "pending"
+	var failedAt *time.Time
 	if failed {
 		state = "failed"
+		failedAt = dbTimePtr(&next)
 	}
 	tag, err := db.Exec(ctx,
-		`UPDATE notifications SET state = $2, attempts = attempts + 1, last_error = $3, next_attempt_at = $4, claimed_until = NULL
-		 WHERE id = $1 AND state = 'pending'`, id, state, lastError, dbTime(next))
+		`UPDATE notifications SET state = $2, attempts = attempts + 1, last_error = $3, next_attempt_at = $4, claimed_until = NULL,
+			failed_at = $5
+		 WHERE id = $1 AND state = 'pending'`, id, state, lastError, dbTime(next), failedAt)
 	if err != nil {
 		return fmt.Errorf("mark notification retry: %w", mapError(err))
 	}
@@ -185,7 +189,7 @@ func DeferNotification(ctx context.Context, db DBTX, id int64, next time.Time) e
 // would leave a backlog that grows without bound.
 func ExpireStaleNotifications(ctx context.Context, db DBTX, createdBefore, now time.Time, reason string) (int, error) {
 	tag, err := db.Exec(ctx,
-		`UPDATE notifications SET state = 'failed', last_error = $3, claimed_until = NULL
+		`UPDATE notifications SET state = 'failed', last_error = $3, claimed_until = NULL, failed_at = $2
 		 WHERE state = 'pending' AND created_at < $1 AND (claimed_until IS NULL OR claimed_until <= $2)`,
 		dbTime(createdBefore), dbTime(now), reason)
 	if err != nil {

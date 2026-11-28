@@ -101,7 +101,7 @@ func TestLoopAdvancesOnWake(t *testing.T) {
 
 func TestLoopMakesProgressWithoutValkey(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	client, err := cache.Open("127.0.0.1:1") // nothing listens on this port
+	client, err := cache.Open(cache.Options{Addr: "127.0.0.1:1"}) // nothing listens on this port
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}
@@ -294,5 +294,55 @@ func TestPanicInOneRunDoesNotStopTheLoop(t *testing.T) {
 				t.Errorf("the panic was not logged with the run id; log:\n%s", out)
 			}
 		})
+	}
+}
+
+func TestLoopPrunesOldRunnerRowsAndEventsAtMostOncePerHour(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	ctx := context.Background()
+	now := h.clock.Now()
+	old, young := now.Add(-7*24*time.Hour-time.Minute), now.Add(-6*24*time.Hour)
+	seed := func() {
+		t.Helper()
+		for id, seen := range map[string]time.Time{"old": old, "young": young} {
+			if err := store.UpsertRunner(ctx, h.pool, store.RunnerInfo{ID: id, Version: "v", Concurrency: 1, StartedAt: seen, LastSeenAt: seen}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, at := range []time.Time{old, young} {
+			if err := store.RecordEvent(ctx, h.pool, "sync_failed", at); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	left := func() (runners, events int) {
+		t.Helper()
+		rs, err := store.ListRunners(ctx, h.pool, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := store.CountEvents(ctx, h.pool, "sync_failed", time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rs), n
+	}
+
+	seed()
+	h.eng.sweepTick(ctx, nil)
+	if r, e := left(); r != 1 || e != 1 {
+		t.Fatalf("after the first tick %d runners and %d events are left, want 1 and 1 (only the week-old ones go)", r, e)
+	}
+	// Within the hour the next tick does not look again.
+	seed()
+	h.clock.Advance(59 * time.Minute)
+	h.eng.sweepTick(ctx, nil)
+	if r, e := left(); r != 2 || e != 3 {
+		t.Fatalf("a tick within the hour left %d runners and %d events, want 2 and 3 (no pruning yet)", r, e)
+	}
+	h.clock.Advance(2 * time.Minute)
+	h.eng.sweepTick(ctx, nil)
+	if r, e := left(); r != 1 || e != 2 {
+		t.Fatalf("a tick after the hour left %d runners and %d events, want 1 and 2", r, e)
 	}
 }

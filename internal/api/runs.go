@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -126,22 +127,25 @@ type runStateView struct {
 }
 
 type runSummaryView struct {
-	ID             int64      `json:"id"`
-	Kind           string     `json:"kind"`
-	JobSourceID    int64      `json:"job_source_id"`
-	JobID          string     `json:"job_id"`
-	Environment    string     `json:"environment"`
-	Label          string     `json:"label"`
-	State          string     `json:"state"`
-	WaitReason     string     `json:"wait_reason"`
-	EndReason      string     `json:"end_reason"`
-	ManifestID     string     `json:"manifest_id"`
-	RequestedBy    int64      `json:"requested_by"`
-	Via            string     `json:"via"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StateChangedAt time.Time  `json:"state_changed_at"`
-	StartedAt      *time.Time `json:"started_at"`
-	FinishedAt     *time.Time `json:"finished_at"`
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	JobSourceID int64  `json:"job_source_id"`
+	JobID       string `json:"job_id"`
+	JobName     string `json:"job_name"` // the job source's title, "" when unset
+	Environment string `json:"environment"`
+	Label       string `json:"label"`
+	State       string `json:"state"`
+	WaitReason  string `json:"wait_reason"`
+	EndReason   string `json:"end_reason"`
+	ManifestID  string `json:"manifest_id"`
+	RequestedBy int64  `json:"requested_by"`
+	// RequestedByName is the requester's name, else their email.
+	RequestedByName string     `json:"requested_by_name"`
+	Via             string     `json:"via"`
+	CreatedAt       time.Time  `json:"created_at"`
+	StateChangedAt  time.Time  `json:"state_changed_at"`
+	StartedAt       *time.Time `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at"`
 }
 
 type runDetailView struct {
@@ -158,13 +162,53 @@ type runDetailView struct {
 	runProgress
 }
 
-func summarizeRun(r store.Run) runSummaryView {
+func summarizeRun(r store.Run, names store.RunNames) runSummaryView {
 	return runSummaryView{
-		ID: r.ID, Kind: r.Kind, JobSourceID: r.JobSourceID, JobID: r.JobID, Environment: r.Environment, Label: r.Label,
+		ID: r.ID, Kind: r.Kind, JobSourceID: r.JobSourceID, JobID: r.JobID, JobName: names.JobName, Environment: r.Environment, Label: r.Label,
 		State: r.State, WaitReason: r.WaitReason, EndReason: r.EndReason, ManifestID: r.ManifestID,
-		RequestedBy: r.RequestedBy, Via: r.Via, CreatedAt: r.CreatedAt, StateChangedAt: r.StateChangedAt,
+		RequestedBy: r.RequestedBy, RequestedByName: names.RequestedByName, Via: r.Via, CreatedAt: r.CreatedAt, StateChangedAt: r.StateChangedAt,
 		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 	}
+}
+
+// runRowView is a run's row in the list: the run, where each of its services stands and how its legs add up.
+type runRowView struct {
+	runSummaryView
+	Services []serviceStrip `json:"services"`
+	Summary  summaryView    `json:"summary"`
+}
+
+// buildRows shapes listed runs with one query for all their legs, one for their step names and one for the names.
+func (s *server) buildRows(ctx context.Context, runs []store.Run) ([]runRowView, error) {
+	ids := make([]int64, 0, len(runs))
+	for _, run := range runs {
+		ids = append(ids, run.ID)
+	}
+	names, err := store.NamesOfRuns(ctx, s.Pool, ids)
+	if err != nil {
+		return nil, err
+	}
+	stepNames, err := store.StepNamesOfRuns(ctx, s.Pool, ids)
+	if err != nil {
+		return nil, err
+	}
+	legs, err := store.LegsOfRuns(ctx, s.Pool, ids)
+	if err != nil {
+		return nil, err
+	}
+	legsOf := make(map[int64][]store.Leg, len(runs))
+	for _, l := range legs {
+		legsOf[l.RunID] = append(legsOf[l.RunID], l)
+	}
+	rows := make([]runRowView, 0, len(runs))
+	for _, run := range runs {
+		rows = append(rows, runRowView{
+			runSummaryView: summarizeRun(run, names[run.ID]),
+			Services:       serviceStrips(legsOf[run.ID]),
+			Summary:        summarizeLegs(legsOf[run.ID], stepNames),
+		})
+	}
+	return rows, nil
 }
 
 // buildProgress reads a run's legs and locks and shapes them. steps names the
@@ -185,10 +229,7 @@ func (s *server) buildProgress(ctx context.Context, run store.Run, steps []store
 	view := runProgress{
 		CancelRequested: run.CancelRequestedAt != nil || run.CancelRequestedBy != nil,
 		Legs:            make([]legView, 0, len(legs)), Locks: locks,
-		Summary: summaryView{Counts: make(map[string]int, len(legStates)), Failures: []failureView{}},
-	}
-	for _, state := range legStates {
-		view.Summary.Counts[state] = 0
+		Summary: summarizeLegs(legs, stepName),
 	}
 	for _, l := range legs {
 		name := ""
@@ -200,13 +241,84 @@ func (s *server) buildProgress(ctx context.Context, run store.Run, steps []store
 			Attempt: l.Attempt, CancelRequested: l.CancelRequested, FailureShort: l.FailureShort, FailureDetail: l.FailureDetail,
 			QueuedAt: l.QueuedAt, StartedAt: l.StartedAt, FinishedAt: l.FinishedAt,
 		})
-		view.Summary.Counts[l.State]++
+	}
+	return view, nil
+}
+
+// summarizeLegs counts a run's legs by state (every state is present, zero included) and lists the failed and unknown ones.
+func summarizeLegs(legs []store.Leg, stepName map[int64]string) summaryView {
+	summary := summaryView{Counts: make(map[string]int, len(legStates)), Failures: []failureView{}}
+	for _, state := range legStates {
+		summary.Counts[state] = 0
+	}
+	for _, l := range legs {
+		summary.Counts[l.State]++
 		if l.State == "failed" || l.State == "unknown" {
-			view.Summary.Failures = append(view.Summary.Failures, failureView{
+			name := ""
+			if l.StepID != nil {
+				name = stepName[*l.StepID]
+			}
+			summary.Failures = append(summary.Failures, failureView{
 				LegID: l.ID, Service: l.Service, Step: name, Kind: l.Kind, State: l.State, Short: l.FailureShort, Detail: l.FailureDetail})
 		}
 	}
-	return view, nil
+	return summary
+}
+
+// serviceStrip is one service of a run in the list: its version and where it stands.
+type serviceStrip struct {
+	Service string `json:"service"`
+	Version string `json:"version"`
+	State   string `json:"state"`
+}
+
+// serviceStrips lists the services of a run's step legs (resolve and revalidate legs have none), in the order the
+// run first mentions them. It is the Go side of serviceProgress in web/src/features/runs/runModel.ts.
+func serviceStrips(legs []store.Leg) []serviceStrip {
+	strips := []serviceStrip{}
+	index := map[string]int{}
+	states := map[string][]string{}
+	for _, l := range legs {
+		if l.Kind != "step" || l.Service == "" {
+			continue
+		}
+		i, seen := index[l.Service]
+		if !seen {
+			i = len(strips)
+			index[l.Service] = i
+			strips = append(strips, serviceStrip{Service: l.Service})
+		}
+		if strips[i].Version == "" {
+			strips[i].Version = l.Version
+		}
+		states[l.Service] = append(states[l.Service], l.State)
+	}
+	for i := range strips {
+		strips[i].State = overallServiceState(states[strips[i].Service])
+	}
+	return strips
+}
+
+// overallServiceState is the one state that stands for all of a service's step legs: the worst problem first, then
+// anything still live, then done, cancelled or skipped; a mix of finished and waiting legs reads as running.
+func overallServiceState(states []string) string {
+	has := func(want string) bool { return slices.Contains(states, want) }
+	for _, worst := range []string{"failed", "unknown", "running", "claimed", "queued"} {
+		if has(worst) {
+			return worst
+		}
+	}
+	switch {
+	case len(states) > 0 && !slices.ContainsFunc(states, func(s string) bool { return s != "succeeded" }):
+		return "succeeded"
+	case has("cancelled"):
+		return "cancelled"
+	case has("skipped"):
+		return "skipped"
+	case has("succeeded"):
+		return "running"
+	}
+	return "pending"
 }
 
 // buildState is the state event's body.
@@ -230,8 +342,12 @@ func (s *server) buildDetail(ctx context.Context, run store.Run) (runDetailView,
 	if err != nil {
 		return runDetailView{}, err
 	}
+	names, err := store.NamesOfRuns(ctx, s.Pool, []int64{run.ID})
+	if err != nil {
+		return runDetailView{}, err
+	}
 	out := runDetailView{
-		runSummaryView: summarizeRun(run), AWSAccount: run.AWSAccount, FolderID: run.FolderID,
+		runSummaryView: summarizeRun(run, names[run.ID]), AWSAccount: run.AWSAccount, FolderID: run.FolderID,
 		InventoryCommit: run.InventoryCommit, JobCommit: run.JobCommit,
 		ApprovalRequired: run.ApprovalRequired, AutoStart: run.AutoStart,
 		Steps: make([]stepView, 0, len(steps)), runProgress: progress,
@@ -512,13 +628,15 @@ func (s *server) listRuns(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	out := struct {
-		Runs       []runSummaryView `json:"runs"`
-		NextBefore *int64           `json:"next_before"`
-	}{Runs: make([]runSummaryView, 0, len(runs))}
-	for _, run := range runs {
-		out.Runs = append(out.Runs, summarizeRun(run))
+	rows, err := s.buildRows(r.Context(), runs)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
 	}
+	out := struct {
+		Runs       []runRowView `json:"runs"`
+		NextBefore *int64       `json:"next_before"`
+	}{Runs: rows}
 	if len(runs) == int(limit) {
 		last := runs[len(runs)-1].ID
 		out.NextBefore = &last

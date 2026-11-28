@@ -290,6 +290,11 @@ func (s *server) testAWSAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result := combineAWSChecks(s.checkAWSDiscovery(ctx, account), checkAWSDeploy(account))
+	if result.OK {
+		connectionChecks{pool: s.Pool, log: s.Log}.OK(ctx, "aws", account.AccountID, s.Now())
+	} else {
+		connectionChecks{pool: s.Pool, log: s.Log}.Error(ctx, "aws", account.AccountID, result.ErrorCode, s.Now())
+	}
 	if err := s.recordAudit(ctx, s.Pool, r, audit.Event{Action: "aws_account.test", TargetType: "aws_account", TargetID: strconv.FormatInt(account.ID, 10),
 		Detail: map[string]any{"account_id": account.AccountID, "ok": result.OK, "error_code": result.ErrorCode}}); err != nil {
 		s.internalError(w, r, err)

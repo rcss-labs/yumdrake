@@ -14,6 +14,7 @@ interface Ready {
   base_url: string
   email: string
   password: string
+  runner_pid: number
 }
 
 /** Waits for the helper's one JSON line; rejects if it exits first or takes too long. */
@@ -81,6 +82,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.YUMDRAKE_E2E_BASE_URL = ready.base_url
   process.env.YUMDRAKE_E2E_EMAIL = ready.email
   process.env.YUMDRAKE_E2E_PASSWORD = ready.password
+  // The runner's process id, so a spec can stop and restart it (see e2e/runner.ts).
+  process.env.YUMDRAKE_E2E_RUNNER_PID = String(ready.runner_pid)
 
   return async () => {
     await stop(child)

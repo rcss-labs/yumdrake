@@ -144,12 +144,15 @@ export function PlanPanel({ run }: { run: RunDetail }) {
 
   // A 404 means "not planned yet". When the run's state moves past resolving (a state event on an open page),
   // ask again, so the plan appears without a reload, also for a person who cannot start the run.
+  // The ref holds the state the run was in when the plan was last asked for. It moves only when we ask again, so a
+  // state event that arrives while the first request is in flight is still seen once that request answers 404.
   const stateAtLastAsk = useRef(run.state)
   const notPlanned = error?.status === 404
   useEffect(() => {
-    if (stateAtLastAsk.current === run.state) return
+    if (!notPlanned || stateAtLastAsk.current === run.state) return
+    if (run.state === 'resolving') return
     stateAtLastAsk.current = run.state
-    if (notPlanned && run.state !== 'resolving') void refetch()
+    void refetch()
   }, [run.state, notPlanned, refetch])
 
   if (isPending || notPlanned) {

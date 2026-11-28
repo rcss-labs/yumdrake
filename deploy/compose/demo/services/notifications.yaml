@@ -1,0 +1,23 @@
+apiVersion: yumdrake/v1
+kind: Service
+name: notifications
+versions:
+  pattern: '^v?\d+\.\d+\.\d+$'
+  sort: semver
+  limit: 50
+environments:
+  dev:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/dev/notifications
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/notifications
+  qa:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/qa/notifications
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/notifications
+  staging:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/staging/notifications
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/notifications
+  preprod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/preprod/notifications
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/notifications
+  prod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/prod/notifications
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/notifications

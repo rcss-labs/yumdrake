@@ -1,8 +1,8 @@
 # ElastiCache for Valkey, encrypted at rest and in transit, private.
 #
-# NOTE: with encryption in transit on, clients must connect with TLS. Check that
-# the version of Yumdrake you run can do that (and whether it needs a variable
-# for it) before relying on this; see the README.
+# NOTE: with encryption in transit on, clients must connect with TLS.
+# ecs.tf sets YUMDRAKE_VALKEY_TLS=true for both services, which makes the
+# application connect over TLS (needs a version that reads it; see the README).
 
 resource "aws_elasticache_subnet_group" "this" {
   name       = "${local.name}-cache"

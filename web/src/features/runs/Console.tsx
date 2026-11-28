@@ -139,9 +139,10 @@ export function Console({ run, live, scope }: { run: RunDetail; live: RunLive; s
           </div>
         )}
       </div>
-      {live.error && (
+      {/* For an active run "live updates stopped" is said once, by the run page, with its own Retry. */}
+      {live.error && !active && (
         <div className="con-strip con-strip-error" role="alert">
-          {active ? `Live updates stopped: ${live.error.message}. ` : `The log could not be read completely: ${live.error.message}. `}
+          {`The log could not be read completely: ${live.error.message}. `}
           <button type="button" className="con-strip-btn" onClick={live.retry}>
             Retry
           </button>

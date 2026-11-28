@@ -2,9 +2,11 @@
 // Planning legs (resolve, revalidate) have no step: they are their own items before the steps, with the
 // scope { kind: 'step', step: ':resolve' | ':revalidate' } (a colon cannot be in a real step name).
 import { useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import type { LegState, LogLine, RunDetail, RunLeg } from '../../api/types'
 import { statusLabel, statusShape, statusTone } from '../../ui'
 import { combinedState, needsAttention, planningStep } from './consoleModel'
+import { servicePath } from '../service/servicePath'
 import { sameScope, wholeRun, type ConsoleScope } from './scope'
 import './console.css'
 
@@ -110,19 +112,23 @@ export function StepsTree({
             {item.services.map((service) => {
               const serviceScope: ConsoleScope = { kind: 'service', service: service.service }
               return (
-                <button
-                  key={service.key}
-                  type="button"
-                  className="tn tn-svc"
-                  aria-current={service.key === currentServiceKey ? 'true' : undefined}
-                  onClick={choose(serviceScope)}
-                >
-                  <Mark state={service.state} />
-                  <span className="tn-name">{service.service}</span>
-                  {service.attempt > 1 && <span className="tn-attempt">attempt {service.attempt}</span>}
-                  <span className="tn-meta">{service.version}</span>
-                  <span className="con-sr">{statusLabel(service.state)}</span>
-                </button>
+                <div key={service.key} className="tn-svc-row">
+                  <button
+                    type="button"
+                    className="tn tn-svc"
+                    aria-current={service.key === currentServiceKey ? 'true' : undefined}
+                    onClick={choose(serviceScope)}
+                  >
+                    <Mark state={service.state} />
+                    <span className="tn-name">{service.service}</span>
+                    {service.attempt > 1 && <span className="tn-attempt">attempt {service.attempt}</span>}
+                    <span className="tn-meta">{service.version}</span>
+                    <span className="con-sr">{statusLabel(service.state)}</span>
+                  </button>
+                  <Link className="tn-open" to={servicePath(service.service)} aria-label={`${service.service} service page`}>
+                    Page
+                  </Link>
+                </div>
               )
             })}
           </div>

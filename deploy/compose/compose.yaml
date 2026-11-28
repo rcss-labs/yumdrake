@@ -1,0 +1,159 @@
+# Yumdrake on one host with Docker Compose. Read README.md in this directory.
+#
+# Settings and secrets come from .env (copy .env.example; .env is git-ignored).
+# Without compose.tls.yaml the orchestrator publishes its HTTP port itself
+# (bound to 127.0.0.1 unless YUMDRAKE_HTTP_BIND says otherwise); with it, the
+# caddy front publishes 80 and 443 and the orchestrator publishes nothing.
+# PostgreSQL and Valkey are never published.
+# Not "yumdrake": a clone of the repository is a directory of that name, and the
+# root compose.yaml (the dev stack) takes its project name from it.
+name: yumdrake-compose
+
+x-app-environment: &app-environment
+  YUMDRAKE_DATABASE_URL: postgres://yumdrake@postgres:5432/yumdrake?sslmode=disable
+  PGPASSWORD: ${YUMDRAKE_DATABASE_PASSWORD:?set YUMDRAKE_DATABASE_PASSWORD in .env (copy .env.example)}
+  YUMDRAKE_VALKEY_ADDR: valkey:6379
+  YUMDRAKE_VALKEY_PASSWORD: ${YUMDRAKE_VALKEY_PASSWORD:?set YUMDRAKE_VALKEY_PASSWORD in .env (copy .env.example)}
+  YUMDRAKE_SECRETS_MODE: local
+  YUMDRAKE_LOCAL_SECRET_KEY: ${YUMDRAKE_LOCAL_SECRET_KEY:?set YUMDRAKE_LOCAL_SECRET_KEY in .env (generate one with openssl rand -base64 32)}
+  YUMDRAKE_LOG_LEVEL: ${YUMDRAKE_LOG_LEVEL:-info}
+  AWS_REGION: ${YUMDRAKE_AWS_REGION:-}
+  AWS_ENDPOINT_URL: ${YUMDRAKE_AWS_ENDPOINT_URL:-}
+  YUMDRAKE_AWS_ENDPOINT_URL: ${YUMDRAKE_AWS_ENDPOINT_URL:-}
+
+services:
+  postgres:
+    image: postgres:17.12-alpine
+    user: "70:70"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yumdrake
+      POSTGRES_USER: yumdrake
+      POSTGRES_PASSWORD: ${YUMDRAKE_DATABASE_PASSWORD:?set YUMDRAKE_DATABASE_PASSWORD in .env (copy .env.example)}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yumdrake -d yumdrake"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  valkey:
+    image: valkey/valkey:8.1.12
+    user: "999:999"
+    restart: unless-stopped
+    # The password is in the server's process arguments inside the container.
+    command:
+      - sh
+      - -c
+      - exec valkey-server --requirepass "$$YUMDRAKE_VALKEY_PASSWORD" --appendonly yes
+    environment:
+      YUMDRAKE_VALKEY_PASSWORD: ${YUMDRAKE_VALKEY_PASSWORD:?set YUMDRAKE_VALKEY_PASSWORD in .env (copy .env.example)}
+      # The health check authenticates through the environment, not the command line.
+      REDISCLI_AUTH: ${YUMDRAKE_VALKEY_PASSWORD}
+      VALKEYCLI_AUTH: ${YUMDRAKE_VALKEY_PASSWORD}
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  orchestrator:
+    image: ${YUMDRAKE_IMAGE_REPO:?set YUMDRAKE_IMAGE_REPO in .env (for example ghcr.io/rcss-labs)}/yumdrake-orchestrator:${YUMDRAKE_VERSION:?set YUMDRAKE_VERSION in .env (a release tag such as v1.0.0)}
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      YUMDRAKE_PUBLIC_URL: ${YUMDRAKE_PUBLIC_URL:?set YUMDRAKE_PUBLIC_URL in .env (the address people open, for example https://yumdrake.example.com)}
+      YUMDRAKE_LOG_ARCHIVE_DIR: /var/lib/yumdrake/log-archive
+      AWS_ACCESS_KEY_ID: ${YUMDRAKE_ORCHESTRATOR_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${YUMDRAKE_ORCHESTRATOR_AWS_SECRET_ACCESS_KEY:-}
+    # Longer than YUMDRAKE_SHUTDOWN_TIMEOUT (20s) so in-flight legs and buffered logs drain.
+    stop_grace_period: 30s
+    ports:
+      - "${YUMDRAKE_HTTP_BIND:-127.0.0.1}:${YUMDRAKE_HTTP_PORT:-8080}:8080"
+    volumes:
+      - log-archive:/var/lib/yumdrake/log-archive
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/yumdrake-orchestrator", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  runner:
+    image: ${YUMDRAKE_IMAGE_REPO:?set YUMDRAKE_IMAGE_REPO in .env (for example ghcr.io/rcss-labs)}/yumdrake-runner:${YUMDRAKE_VERSION:?set YUMDRAKE_VERSION in .env (a release tag such as v1.0.0)}
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      YUMDRAKE_ARTIFACT_DIR: /var/lib/yumdrake/artifacts
+      AWS_ACCESS_KEY_ID: ${YUMDRAKE_RUNNER_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${YUMDRAKE_RUNNER_AWS_SECRET_ACCESS_KEY:-}
+    # Longer than YUMDRAKE_SHUTDOWN_TIMEOUT (20s) so in-flight legs and buffered logs drain.
+    stop_grace_period: 30s
+    volumes:
+      - artifacts:/var/lib/yumdrake/artifacts
+    # The runner starts only once the orchestrator is healthy, that is after it
+    # has applied the schema migrations of this version.
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/yumdrake-runner", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      replicas: ${YUMDRAKE_RUNNER_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+volumes:
+  postgres-data:
+  valkey-data:
+  artifacts:
+  log-archive:

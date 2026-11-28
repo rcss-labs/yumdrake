@@ -359,7 +359,7 @@ func TestListRunsFilters(t *testing.T) {
 	same("nothing matches", ids("?q=zzz"))
 	_, rawList := f.doRaw("GET", "/api/v1/runs", f.adminToken, nil)
 	if found := nullSlices(reflect.TypeFor[struct {
-		Runs []runSummaryView `json:"runs"`
+		Runs []runRowView `json:"runs"`
 	}](), rawList, ""); len(found) > 0 {
 		t.Errorf("run list has null where a list belongs: %v", found)
 	}
@@ -661,5 +661,79 @@ func (f *runFixture) wantLegState(t *testing.T, id int64, want string) {
 	leg, err := store.GetLeg(context.Background(), f.pool, id)
 	if err != nil || leg.State != want {
 		t.Errorf("leg %d state = %q (%v), want %q", id, leg.State, err, want)
+	}
+}
+
+func TestListRunsCarriesServicesSummaryAndNames(t *testing.T) {
+	f := newRunFixture(t)
+	f.exec(`UPDATE job_sources SET title = 'Release backends' WHERE id = $1`, f.jobID)
+	busy := f.newRun(f.jobID, devEnvironment, "s1", "s2", "s3")
+	bare := f.newRun(f.otherJobID, devEnvironment, "s4")
+	f.exec(`DELETE FROM legs WHERE run_id = $1 AND kind = 'step'`, bare)
+	f.exec(`UPDATE users SET name = 'Ada Admin' WHERE id = (SELECT requested_by FROM runs WHERE id = $1)`, busy)
+	f.exec(`UPDATE legs SET state = 'succeeded' WHERE run_id = $1 AND service = 's1'`, busy)
+	f.exec(`UPDATE legs SET state = 'failed', failure_short = 'task failed', failure_detail = 'OutOfMemory'
+	        WHERE run_id = $1 AND service = 's2' AND step_id = (SELECT id FROM run_steps WHERE run_id = $1 AND name = 'config')`, busy)
+	f.exec(`UPDATE legs SET state = 'skipped' WHERE run_id = $1 AND service = 's2' AND state = 'pending'`, busy)
+	f.exec(`UPDATE legs SET state = 'succeeded' WHERE run_id = $1 AND service = 's3' AND step_id = (SELECT id FROM run_steps WHERE run_id = $1 AND name = 'config')`, busy)
+
+	got := f.mustDo("GET", "/api/v1/runs", nil, http.StatusOK)
+	rows := map[int64]map[string]any{}
+	for _, r := range got["runs"].([]any) {
+		row := r.(map[string]any)
+		rows[int64(row["id"].(float64))] = row
+	}
+	row := rows[busy]
+	services := row["services"].([]any)
+	want := []struct{ service, version, state string }{{"s1", "1.0", "succeeded"}, {"s2", "1.0", "failed"}, {"s3", "1.0", "running"}}
+	if len(services) != len(want) {
+		t.Fatalf("services = %v, want %v (step legs only, in order of first appearance)", services, want)
+	}
+	for i, w := range want {
+		s := services[i].(map[string]any)
+		if s["service"] != w.service || s["version"] != w.version || s["state"] != w.state {
+			t.Errorf("services[%d] = %v, want %v", i, s, w)
+		}
+	}
+	summary := row["summary"].(map[string]any)
+	counts := summary["counts"].(map[string]any)
+	if counts["failed"] != float64(1) || counts["succeeded"] != float64(3) || counts["skipped"] != float64(1) || counts["cancelled"] != float64(0) {
+		t.Errorf("counts = %v, want failed 1, succeeded 3, skipped 1 and zeros for the rest", counts)
+	}
+	if failures := summary["failures"].([]any); len(failures) != 1 || failures[0].(map[string]any)["service"] != "s2" || failures[0].(map[string]any)["step"] != "config" {
+		t.Errorf("failures = %v, want the one failed s2 config leg", summary["failures"])
+	}
+	if row["job_name"] != "Release backends" || row["requested_by_name"] != "Ada Admin" {
+		t.Errorf("job_name %v requested_by_name %v", row["job_name"], row["requested_by_name"])
+	}
+
+	none := rows[bare]
+	if list, ok := none["services"].([]any); !ok || len(list) != 0 {
+		t.Errorf("a run with no step legs has services %v, want []", none["services"])
+	}
+	if none["summary"].(map[string]any)["failures"] == nil {
+		t.Errorf("failures must be [] not null")
+	}
+	if name := none["requested_by_name"]; name == "" {
+		t.Errorf("requested_by_name is empty, want the name or else the email")
+	}
+}
+
+func TestRunDetailCarriesJobAndRequesterNames(t *testing.T) {
+	f := newRunFixture(t)
+	f.exec(`UPDATE job_sources SET title = 'Release backends' WHERE id = $1`, f.jobID)
+	id := f.newRun(f.jobID, devEnvironment, "s1")
+	f.exec(`UPDATE users SET name = '' WHERE id = (SELECT requested_by FROM runs WHERE id = $1)`, id)
+	var email string
+	if err := f.pool.QueryRow(context.Background(), `SELECT u.email FROM users u JOIN runs r ON r.requested_by = u.id WHERE r.id = $1`, id).Scan(&email); err != nil {
+		t.Fatal(err)
+	}
+	got := f.mustDo("GET", runPath(id, ""), nil, http.StatusOK)
+	if got["job_name"] != "Release backends" || got["requested_by_name"] != email {
+		t.Errorf("job_name %v requested_by_name %v, want the job title and, with no name, the email %q", got["job_name"], got["requested_by_name"], email)
+	}
+	f.exec(`UPDATE users SET name = 'Ada Admin' WHERE email = $1`, email)
+	if started := f.mustDo("POST", runPath(id, "/cancel"), nil, http.StatusOK); started["requested_by_name"] != "Ada Admin" || started["job_name"] != "Release backends" {
+		t.Errorf("a run action answers job_name %v requested_by_name %v, want the same names", started["job_name"], started["requested_by_name"])
 	}
 }

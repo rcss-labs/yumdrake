@@ -19,7 +19,7 @@ func valkeyTestAddr(t *testing.T) string {
 }
 
 func TestPingSucceedsAgainstRunningValkey(t *testing.T) {
-	client, err := Open(valkeyTestAddr(t))
+	client, err := Open(Options{Addr: valkeyTestAddr(t)})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestPingSucceedsAgainstRunningValkey(t *testing.T) {
 }
 
 func TestOpenDoesNotFailWhenValkeyIsDown(t *testing.T) {
-	client, err := Open("127.0.0.1:1")
+	client, err := Open(Options{Addr: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Open with unreachable Valkey returned error: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestOpenDoesNotFailWhenValkeyIsDown(t *testing.T) {
 }
 
 func TestPingFailsWithinDeadlineWhenValkeyIsDown(t *testing.T) {
-	client, err := Open("127.0.0.1:1")
+	client, err := Open(Options{Addr: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

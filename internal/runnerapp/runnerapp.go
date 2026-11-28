@@ -39,7 +39,10 @@ func RegisterExecutors(ctx context.Context, log *slog.Logger, cfg config.Runner,
 	if err != nil {
 		return err
 	}
-	deps := resolveDeps(cfg, pool, identity, log)
+	deps, err := resolveDeps(cfg, pool, identity, log)
+	if err != nil {
+		return err
+	}
 	r.Register("resolve", resolve.New(deps))
 	r.Register("revalidate", revalidate.New(deps))
 	return nil
@@ -82,8 +85,20 @@ func newIdentity(ctx context.Context, log *slog.Logger, cfg config.Runner, pool 
 // snapshot (not the active one), uses the deployment credentials of the run's
 // account for ECS, ECR and S3, GitHub through the stored connections, and
 // writes config copies to the artifact bucket with the runner's own identity.
-func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.Logger) resolve.Deps {
-	artifactClient := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.Logger) (resolve.Deps, error) {
+	// Config copies go to the bucket or, when YUMDRAKE_ARTIFACT_DIR is set,
+	// to encrypted files in that directory; config validation allows only one.
+	var copies artifacts.Store
+	if cfg.ArtifactDir != "" {
+		dirStore, err := artifacts.NewDir(cfg.ArtifactDir, id.cipher)
+		if err != nil {
+			return resolve.Deps{}, fmt.Errorf("artifact directory: %w", err)
+		}
+		copies = dirStore
+	} else {
+		artifactClient := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+		copies = artifacts.New(artifactClient, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID)
+	}
 	githubClient := app.GitHubClients(pool, id.cipher, cfg.GitHubAPIURL, log)
 	return resolve.Deps{
 		AWS: id.credentials.For,
@@ -94,7 +109,7 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			}
 			return client, nil
 		},
-		Artifacts: artifacts.New(artifactClient, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID),
+		Artifacts: copies,
 		Inventory: func(ctx context.Context, snapshotID int64) (spec.Inventory, error) {
 			snapshot, err := store.SnapshotByID(ctx, pool, snapshotID)
 			if err != nil {
@@ -107,5 +122,5 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			return inventory, nil
 		},
 		Options: cfg.AWS,
-	}
+	}, nil
 }

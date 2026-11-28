@@ -1,0 +1,12 @@
+# HTTPS front for the orchestrator. Caddy gets and renews the certificate for
+# the host name itself. The name `localhost` makes it use its internal CA
+# (used by scripts/compose-check.sh).
+{$YUMDRAKE_PUBLIC_HOST} {
+	header Strict-Transport-Security "max-age=31536000"
+
+	# No `encode`, and flush_interval -1: the run event stream must reach the
+	# browser as it is written, not in buffered chunks.
+	reverse_proxy orchestrator:8080 {
+		flush_interval -1
+	}
+}

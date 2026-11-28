@@ -363,3 +363,58 @@ func StepsOfRun(ctx context.Context, db DBTX, runID int64) ([]RunStep, error) {
 	}
 	return steps, nil
 }
+
+// RunNames are the display names a run's screens show: the job source's title and the requester's name
+// (their email when they have no name).
+type RunNames struct {
+	JobName, RequestedByName string
+}
+
+// NamesOfRuns reads the names of the given runs in one query. A run id that does not exist is absent from the map.
+func NamesOfRuns(ctx context.Context, db DBTX, runIDs []int64) (map[int64]RunNames, error) {
+	rows, err := db.Query(ctx,
+		`SELECT r.id, js.title, COALESCE(NULLIF(u.name, ''), u.email)
+		 FROM runs r
+		 JOIN job_sources js ON js.id = r.job_source_id
+		 JOIN users u ON u.id = r.requested_by
+		 WHERE r.id = ANY($1)`, runIDs)
+	if err != nil {
+		return nil, fmt.Errorf("names of runs: %w", mapError(err))
+	}
+	defer rows.Close()
+	names := make(map[int64]RunNames, len(runIDs))
+	for rows.Next() {
+		var id int64
+		var n RunNames
+		if err := rows.Scan(&id, &n.JobName, &n.RequestedByName); err != nil {
+			return nil, fmt.Errorf("names of runs: %w", mapError(err))
+		}
+		names[id] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("names of runs: %w", mapError(err))
+	}
+	return names, nil
+}
+
+// StepNamesOfRuns maps every step id of the given runs to its name, in one query.
+func StepNamesOfRuns(ctx context.Context, db DBTX, runIDs []int64) (map[int64]string, error) {
+	rows, err := db.Query(ctx, `SELECT id, name FROM run_steps WHERE run_id = ANY($1)`, runIDs)
+	if err != nil {
+		return nil, fmt.Errorf("step names of runs: %w", mapError(err))
+	}
+	defer rows.Close()
+	names := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("step names of runs: %w", mapError(err))
+		}
+		names[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("step names of runs: %w", mapError(err))
+	}
+	return names, nil
+}

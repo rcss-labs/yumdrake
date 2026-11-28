@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rcss-labs/yamdrake/internal/running"
 	"github.com/rcss-labs/yamdrake/internal/spec"
 	"github.com/rcss-labs/yamdrake/internal/store"
 	"github.com/rcss-labs/yamdrake/internal/versions"
@@ -105,6 +106,8 @@ var notAListResponse = map[string]bool{
 	"GET /api/v1/admin/inventory-source": true,
 	// slackResponse holds a bool and two nullable scalars: no slice fields.
 	"GET /api/v1/admin/slack": true,
+	// overviewResponse is checked for [] with no runs by TestOverviewWithNoRunsHasEmptyListsAndNullFigures.
+	"GET /api/v1/analytics/overview": true,
 	// The run routes need runs, so TestGetRunIncludesFailureSummary,
 	// TestListRunsFilters and TestLogEndpointFiltersPagesAndNeedsViewLogs check
 	// their lists with nullSlices; the event stream is not JSON.
@@ -158,6 +161,8 @@ func TestNoRouteReturnsNullForAList(t *testing.T) {
 		}]()),
 		list("GET /api/v1/freezes", "/api/v1/freezes", reflect.TypeFor[freezeListResponse]()),
 		list("GET /api/v1/approvals", "/api/v1/approvals", reflect.TypeFor[approvalListResponse]()),
+		list("GET /api/v1/queue", "/api/v1/queue", reflect.TypeFor[queueResponse]()),
+		list("GET /api/v1/system/health", "/api/v1/system/health", reflect.TypeFor[healthResponse]()),
 	}
 	check := func(stage string, routes []listRoute) {
 		t.Helper()
@@ -181,12 +186,14 @@ func TestNoRouteReturnsNullForAList(t *testing.T) {
 	populatedOnly := []listRoute{
 		list("GET /api/v1/inventory/services/{name}", "/api/v1/inventory/services/orders", reflect.TypeFor[serviceDetail]()),
 		list("GET /api/v1/inventory/services/{name}", "/api/v1/inventory/services/backend-api", reflect.TypeFor[serviceDetail]()),
+		list("GET /api/v1/services/{name}", "/api/v1/services/orders", reflect.TypeFor[servicePageResponse]()),
 	}
 	for _, r := range populatedOnly {
 		listed[r.pattern] = true
 	}
 	listed["GET /api/v1/jobs/{id}"] = true // checked below with the id of the registered job
 	listed["GET /api/v1/jobs/{id}/versions"] = true
+	listed["GET /api/v1/versions/running"] = true // 409 on an empty database; checked populated below
 	for _, route := range (&server{}).routes() {
 		if strings.HasPrefix(route.pattern, "GET ") && !listed[route.pattern] && !notAListResponse[route.pattern] {
 			t.Errorf("%s is neither in the list-shape table nor in notAListResponse", route.pattern)
@@ -215,6 +222,7 @@ func TestNoRouteReturnsNullForAList(t *testing.T) {
 	// No AWS account is connected here, so every service is "unavailable":
 	// the empty and unavailable shapes must still be lists and maps, never null.
 	populated = append(populated, list("GET /api/v1/jobs/{id}/versions", "/api/v1/jobs/"+jobID+"/versions?environment=prod-01", reflect.TypeFor[versions.JobVersions]()))
+	populated = append(populated, list("GET /api/v1/versions/running", "/api/v1/versions/running", reflect.TypeFor[running.Matrix]()))
 	check("populated database", populated)
 
 	// The stored job definition is raw JSON in the response type; walk it as a spec.Job.

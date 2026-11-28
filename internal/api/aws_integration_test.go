@@ -243,6 +243,15 @@ func TestTestConnectionFailureReportsACodeNotTheSecret(t *testing.T) {
 	if result["ok"] != false || result["error_code"] == "" || result["error_code"] == nil {
 		t.Fatalf("result = %v, want ok false with an error code", result)
 	}
+	// The test records the outcome for the System health page: the code only.
+	checks, err := store.ListConnectionChecks(context.Background(), h.pool)
+	if err != nil {
+		t.Fatalf("ListConnectionChecks: %v", err)
+	}
+	if len(checks) != 1 || checks[0].Kind != "aws" || checks[0].Ref != "123456789012" || checks[0].LastErrorAt == nil ||
+		checks[0].LastErrorCode != result["error_code"] || checks[0].LastOKAt != nil {
+		t.Errorf("connection checks = %+v, want one aws check for 123456789012 failed with %v", checks, result["error_code"])
+	}
 	// The discovery and the deployment credential are reported apart. The
 	// orchestrator never holds deployment credentials, so it can only say what
 	// the runner will check.

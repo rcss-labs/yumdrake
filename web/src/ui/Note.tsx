@@ -3,7 +3,7 @@ import { cx } from './classnames'
 import './Note.css'
 
 export interface NoteProps extends ComponentPropsWithoutRef<'div'> {
-  tone?: 'info' | 'warning' | 'error'
+  tone?: 'info' | 'success' | 'warning' | 'error'
 }
 
 // Errors are announced; info and warning are plain content.

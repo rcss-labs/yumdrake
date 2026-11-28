@@ -1,0 +1,35 @@
+.queue-capacity {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+.queue-backlog {
+  margin: 0 0 16px;
+  color: var(--ink2);
+  font-size: 14px;
+}
+.queue-stale {
+  margin-bottom: 16px;
+}
+.queue-section {
+  margin-bottom: 16px;
+}
+.queue-section h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.queue-empty {
+  margin: 0;
+  padding: 16px;
+  color: var(--ink2);
+  font-size: 14px;
+}
+.queue-resource {
+  white-space: nowrap;
+}
+.queue-muted {
+  color: var(--ink3);
+}

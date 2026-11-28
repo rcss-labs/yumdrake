@@ -85,6 +85,11 @@ func LegsOfRun(ctx context.Context, db DBTX, runID int64) ([]Leg, error) {
 	return queryLegs(ctx, db, "legs of run", "SELECT "+legColumns+" FROM legs WHERE run_id = $1 ORDER BY id", runID)
 }
 
+// LegsOfRuns returns the legs of all the given runs in id order, in one query.
+func LegsOfRuns(ctx context.Context, db DBTX, runIDs []int64) ([]Leg, error) {
+	return queryLegs(ctx, db, "legs of runs", "SELECT "+legColumns+" FROM legs WHERE run_id = ANY($1) ORDER BY id", runIDs)
+}
+
 // ExpiredLegs returns claimed or running legs whose lease ended before now.
 func ExpiredLegs(ctx context.Context, db DBTX, now time.Time) ([]Leg, error) {
 	return queryLegs(ctx, db, "expired legs",

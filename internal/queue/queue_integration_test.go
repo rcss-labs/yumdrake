@@ -944,3 +944,76 @@ func TestClaimReportsPreviousRunner(t *testing.T) {
 		t.Fatalf("after a release: PreviousRunnerID = %q, want middle", third.PreviousRunnerID)
 	}
 }
+
+func TestSweepRecordsLeaseExpired(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	start := e.clock.Now().Add(-time.Minute)
+	expired := func() int {
+		t.Helper()
+		n, err := store.CountEvents(ctx, e.pool, "lease_expired", start)
+		if err != nil {
+			t.Fatalf("CountEvents: %v", err)
+		}
+		return n
+	}
+
+	// Two legs held by dead runners and one that is still alive.
+	e.addLeg("a", e.clock.Now())
+	e.addLeg("b", e.clock.Now())
+	e.claim("dead-1")
+	e.claim("dead-2")
+	e.clock.Advance(testLease - 5*time.Second)
+	e.addLeg("c", e.clock.Now())
+	e.claim("alive")
+	e.clock.Advance(10 * time.Second)
+
+	if requeued, unknown, err := e.q.Sweep(ctx); err != nil || requeued != 2 || unknown != 0 {
+		t.Fatalf("Sweep = %d, %d, %v; want 2 requeued", requeued, unknown, err)
+	}
+	if n := expired(); n != 2 {
+		t.Fatalf("lease_expired events after the first sweep = %d, want 2 (one per requeued leg, none for the live one)", n)
+	}
+	if _, _, err := e.q.Sweep(ctx); err != nil {
+		t.Fatalf("second Sweep: %v", err)
+	}
+	if n := expired(); n != 2 {
+		t.Fatalf("lease_expired events after a sweep that found nothing = %d, want still 2", n)
+	}
+
+	// A leg that reaches the fifth expiry becomes unknown and counts too.
+	e2 := newEnv(t)
+	e2.addLeg("svc", e2.clock.Now())
+	for attempt := 1; attempt <= MaxLeaseExpiries; attempt++ {
+		e2.claim(fmt.Sprintf("runner-%d", attempt))
+		e2.clock.Advance(testLease + time.Second)
+		if _, _, err := e2.q.Sweep(ctx); err != nil {
+			t.Fatalf("Sweep: %v", err)
+		}
+	}
+	n, err := store.CountEvents(ctx, e2.pool, "lease_expired", start)
+	if err != nil || n != MaxLeaseExpiries {
+		t.Fatalf("lease_expired events = %d, %v; want %d (four requeues and the unknown)", n, err, MaxLeaseExpiries)
+	}
+}
+
+func TestSweepSurvivesEventRecordingFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t)
+	leg := e.addLeg("svc", e.clock.Now())
+	e.claim("dead")
+	// Every insert into system_events now fails.
+	if _, err := e.pool.Exec(ctx, `ALTER TABLE system_events ADD CONSTRAINT never CHECK (false) NOT VALID`); err != nil {
+		t.Fatalf("break system_events: %v", err)
+	}
+	e.clock.Advance(testLease + time.Second)
+	requeued, unknown, err := e.q.Sweep(ctx)
+	if err != nil || requeued != 1 || unknown != 0 {
+		t.Fatalf("Sweep = %d, %d, %v; want the leg requeued and no error", requeued, unknown, err)
+	}
+	if got := e.get(leg.ID); got.State != "queued" {
+		t.Fatalf("leg state = %q, want queued", got.State)
+	}
+}

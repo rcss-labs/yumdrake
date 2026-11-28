@@ -68,22 +68,14 @@ describe('RunsTable', () => {
     expect(within(row).getByText('5m 0s')).toBeInTheDocument()
   })
 
-  it('falls back to the person number when the name is missing', () => {
-    renderTable([{ ...rowFor(runIds.succeeded), requested_by_name: undefined, requested_by: 42 }])
-    expect(screen.getByText('user #42')).toBeInTheDocument()
-  })
-
   it('omits the Job column on a job history', () => {
     renderTable([rowFor(runIds.succeeded)], false)
     expect(screen.queryByRole('columnheader', { name: 'Job' })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Services' })).toBeInTheDocument()
   })
 
-  it('does not crash when a row has no services or summary', () => {
-    const bare = { ...rowFor(runIds.succeeded), services: undefined, summary: undefined, job_name: undefined }
-    renderTable([bare])
-    const row = rowOf(109)
-    expect(within(row).getByText('Not available')).toBeInTheDocument()
-    expect(within(row).getByRole('link', { name: 'deploy-backend' })).toBeInTheDocument()
+  it('shows the job id when the job has no title', () => {
+    renderTable([{ ...rowFor(runIds.succeeded), job_name: '' }])
+    expect(within(rowOf(109)).getByRole('link', { name: 'deploy-backend' })).toBeInTheDocument()
   })
 })

@@ -35,6 +35,7 @@ locals {
       { name = "YUMDRAKE_LOG_LEVEL", value = var.log_level },
       { name = "YUMDRAKE_DATABASE_URL", value = local.database_url }, # no password: PGPASSWORD below
       { name = "YUMDRAKE_VALKEY_ADDR", value = local.valkey_addr },
+      { name = "YUMDRAKE_VALKEY_TLS", value = "true" },                  # read from plan 11 (task 7) onward; the cache has encryption in transit
       { name = "YUMDRAKE_SECRETS_MODE", value = "kms" },                 # read from plan 5 onward
       { name = "YUMDRAKE_KMS_KEY_ID", value = aws_kms_key.secrets.arn }, # read from plan 5 onward
     ],
@@ -56,6 +57,8 @@ locals {
     { name = "YUMDRAKE_HTTP_ADDR", value = ":8080" },
     { name = "YUMDRAKE_LOG_BUCKET", value = aws_s3_bucket.log_archive.id }, # read from plan 5 onward
     { name = "YUMDRAKE_METRICS", value = var.metrics_mode },                # read from plan 11 (task 4) onward
+    # The dimensions the alarms and scaling expect on every metric (Name=value,Name=value; empty for none).
+    { name = "YUMDRAKE_METRICS_DIMENSIONS", value = join(",", [for k, v in var.metric_dimensions : "${k}=${v}"]) },
   ])
 
   runner_environment = concat(local.common_environment, [

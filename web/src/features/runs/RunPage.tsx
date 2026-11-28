@@ -6,7 +6,7 @@ import type { Target } from '../../auth/permissions'
 import { ApiError } from '../../api/error'
 import type { RunDetail } from '../../api/types'
 import { isFinalRunState } from '../../api/types'
-import { Card, ErrorState, Loading, Note, PageHeader, StatusPill, Time } from '../../ui'
+import { Button, Card, ErrorState, Loading, Note, PageHeader, StatusPill, Time } from '../../ui'
 import { FreezeBanner } from '../freezes/FreezeBanner'
 import { Console } from './Console'
 import { PlanPanel } from './PlanPanel'
@@ -157,7 +157,10 @@ function RunView({ id }: { id: number }) {
       />
       {live.error && !isFinalRunState(run.state) && (
         <Note tone="warning" data-testid="live-stopped">
-          Live updates stopped: {live.error.message}. The state shown is the last known state, and it may be out of date.
+          Live updates stopped: {live.error.message}. The state shown is the last known state, and it may be out of date.{' '}
+          <Button size="sm" onClick={live.retry}>
+            Retry
+          </Button>
         </Note>
       )}
       <RunActions run={run} reload={live.reload} />

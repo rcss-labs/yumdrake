@@ -49,3 +49,12 @@ describe('the approvals count in the sidebar', () => {
     await waitFor(async () => expect((await approvalsLink()).textContent).toBe('Approvals'))
   })
 })
+
+describe('the Queue item in the sidebar', () => {
+  it('sits right under Runs', async () => {
+    renderApp(<App />, { me: viewerMe })
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    const links = Array.from(nav.querySelectorAll('a')).map((link) => link.getAttribute('href'))
+    expect(links.indexOf('/queue')).toBe(links.indexOf('/runs') + 1)
+  })
+})

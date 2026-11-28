@@ -31,6 +31,7 @@ describe('the admin page', () => {
       'GitHub',
       'Git sources',
       'Slack',
+      'System health',
       'Audit log',
     ])
   })
@@ -42,7 +43,7 @@ describe('the admin page', () => {
 
   it('shows only the connection sections to a connections manager', async () => {
     const { names } = await tabNames(connectionsManagerMe, '/admin/aws')
-    expect(names).toEqual(['AWS accounts', 'GitHub', 'Git sources', 'Slack'])
+    expect(names).toEqual(['AWS accounts', 'GitHub', 'Git sources', 'Slack', 'System health'])
   })
 
   it('shows only the audit log to an auditor', async () => {

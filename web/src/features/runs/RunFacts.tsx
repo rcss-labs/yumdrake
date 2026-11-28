@@ -26,7 +26,7 @@ export function RunFacts({ run }: { run: RunDetail }) {
       label: 'Started by',
       value: (
         <>
-          <div>{run.requested_by_name || `user #${run.requested_by}`}</div>
+          <div>{run.requested_by_name}</div>
           {run.via && <div className="run-fact-sub">{`via ${run.via}`}</div>}
         </>
       ),

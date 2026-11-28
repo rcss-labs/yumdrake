@@ -75,6 +75,9 @@ describe('Reconcile', () => {
     expect(within(rowOf('billing')).getByRole('button', { name: 'Mark succeeded' })).toBeDisabled()
     expect(within(rowOf('billing')).getByRole('button', { name: 'Mark failed' })).toBeDisabled()
     await waitFor(() => expect(requests.filter((request) => request.path.endsWith('/reconcile'))).toHaveLength(1))
+    // Let the delayed answer arrive before the test ends: a request still waiting in the mock would otherwise
+    // wake during a later test and take the failure that test queued for the same path.
+    await waitFor(() => expect(within(rowOf('billing')).getByRole('button', { name: 'Mark succeeded' })).toBeEnabled())
   })
 
   it('posts nothing when the confirmation is dismissed', async () => {

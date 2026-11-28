@@ -30,6 +30,8 @@ export const LOG_PAGE_SIZE = 1000
 export const REOPEN_DELAY_MS = 2000
 /** The pause before reopening doubles on every failure up to this. */
 export const REOPEN_MAX_DELAY_MS = 30_000
+/** The server pings every 15 s; no event of any kind for three pings means the stream is dead. */
+export const WATCHDOG_MS = 45_000
 
 interface State {
   run: RunDetail | undefined
@@ -148,6 +150,7 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
     let cancelled = false
     let source: EventSource | undefined
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
+    let watchdog: ReturnType<typeof setTimeout> | undefined
     // (legId, seq) of every line taken so far, also of lines the 20,000 cap dropped.
     const seen = new Set<string>()
     let cursor = ''
@@ -187,10 +190,14 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
     const fetchRun = () => api<RunDetail>('GET', `/api/v1/runs/${runId}`)
 
     // Gets the detail-only fields (approval, selection, ...) that a state event does not carry.
+    // Bumped by every state event applied. An answer that was asked before a newer event must not replace what that
+    // event said, so it is then taken as detail only (a counter, because event times can be equal).
+    let eventsApplied = 0
     const refreshDetail = async (detailOnly: boolean) => {
+      const askedAt = eventsApplied
       try {
         const run = await fetchRun()
-        if (!cancelled) dispatch({ type: 'detail', run, detailOnly })
+        if (!cancelled) dispatch({ type: 'detail', run, detailOnly: detailOnly || eventsApplied !== askedAt })
       } catch (caught) {
         const error = asApiError(caught)
         if (cancelled) return
@@ -203,6 +210,7 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
     reloadRef.current = () => void refreshDetail(false)
 
     const applyState = (body: RunStateEvent) => {
+      eventsApplied += 1
       dispatch({ type: 'state', event: body })
       if (body.state !== knownState || body.cancel_requested !== knownCancel) {
         knownState = body.state
@@ -216,10 +224,25 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
       const stream = new EventSource(`/api/v1/runs/${runId}/events${suffix}`)
       source = stream
       let heardFromServer = false
+      // No event of any kind (a ping counts) for WATCHDOG_MS: the stream is dead though the browser has not said so.
+      // Drop it, read the run again, and reopen through the same path as a stream the browser gave up on.
+      const armWatchdog = () => {
+        clearTimeout(watchdog)
+        watchdog = setTimeout(() => {
+          if (cancelled || source !== stream) return
+          stream.close()
+          dispatch({ type: 'connection', connection: 'reconnecting' })
+          reloadRef.current?.()
+          scheduleReopen()
+        }, WATCHDOG_MS)
+      }
       const heard = () => {
         heardFromServer = true
         failures = 0
+        armWatchdog()
       }
+      armWatchdog()
+      stream.addEventListener('ping', heard)
       stream.addEventListener('open', () => {
         heard()
         dispatch({ type: 'connection', connection: 'live' })
@@ -243,6 +266,7 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
         const body = parse<RunStateEvent>(event)
         if (body) applyState(body)
         stream.close()
+        clearTimeout(watchdog)
         dispatch({ type: 'connection', connection: 'finished' })
       })
       stream.addEventListener('error', () => {
@@ -250,6 +274,7 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
         // CONNECTING: the browser is retrying by itself. CLOSED: it gave up, so check the run and ask again later.
         if (stream.readyState === EventSource.CLOSED && !cancelled) {
           stream.close()
+          clearTimeout(watchdog)
           // A stream that was refused at once with a cursor may have been given a cursor the server does not accept
           // (422): forget it and read the log again; lines already held are not added twice.
           if (!heardFromServer && cursor !== '') {
@@ -334,6 +359,7 @@ export function useRunLive(runId: number, opts: { logs: boolean }): RunLive {
       cancelled = true
       reloadRef.current = undefined
       if (reopenTimer) clearTimeout(reopenTimer)
+      clearTimeout(watchdog)
       source?.close()
     }
   }, [runId, wantLogs, attempt])

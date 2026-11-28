@@ -32,7 +32,7 @@ func valkeyAddr(t *testing.T) string {
 
 func openClient(t *testing.T, addr string) valkey.Client {
 	t.Helper()
-	c, err := cache.Open(addr)
+	c, err := cache.Open(cache.Options{Addr: addr})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}

@@ -60,6 +60,27 @@
   padding-left: 30px;
   min-height: 28px;
 }
+.tn-svc-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tn-svc-row .tn-svc {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.tn-open {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ink3);
+}
+.tn-open:hover {
+  background: var(--raised);
+  color: var(--accent);
+}
 .tn-svc .tn-name {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 13px;

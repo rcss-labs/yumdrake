@@ -12,7 +12,7 @@ async function mainNav() {
 }
 
 describe('the application shell', () => {
-  it('lists eight sections for an administrator', async () => {
+  it('lists nine sections for an administrator', async () => {
     renderApp(<App />, { me: adminMe })
     const nav = await mainNav()
     // The label is the first span; Approvals may also carry a count badge once its request answers.
@@ -20,6 +20,7 @@ describe('the application shell', () => {
       'Overview',
       'Jobs',
       'Runs',
+      'Queue',
       'Approvals',
       'Versions',
       'Inventory',
@@ -28,10 +29,10 @@ describe('the application shell', () => {
     ])
   })
 
-  it('lists seven sections, without Admin, for a person with no grants', async () => {
+  it('lists eight sections, without Admin, for a person with no grants', async () => {
     renderApp(<App />, { me: viewerMe })
     const nav = await mainNav()
-    expect(nav.getAllByRole('link')).toHaveLength(7)
+    expect(nav.getAllByRole('link')).toHaveLength(8)
     expect(nav.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
   })
 
@@ -124,7 +125,7 @@ describe('lists the server sends as null', () => {
     server.use(http.get('/api/v1/me', () => HttpResponse.json({ ...viewerMe, grants: null })))
     renderApp(<App />)
     const nav = await mainNav()
-    expect(nav.getAllByRole('link')).toHaveLength(7)
+    expect(nav.getAllByRole('link')).toHaveLength(8)
   })
 })
 

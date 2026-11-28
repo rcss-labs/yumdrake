@@ -209,6 +209,12 @@ describe('the services tab', () => {
     expect(within(prod).getByText('s3://prod-01-config/env/backend-api/backend-api.env')).toBeInTheDocument()
   })
 
+  it('links the chosen service name to its page', async () => {
+    showInventory('/inventory?tab=services&service=backend-api')
+    const heading = await screen.findByRole('heading', { name: 'backend-api' })
+    expect(within(heading).getByRole('link', { name: 'backend-api' })).toHaveAttribute('href', '/services/backend-api')
+  })
+
   it("shows the service's file under its name", async () => {
     showInventory('/inventory?tab=services&service=backend-api')
     const file = await screen.findByRole('region', { name: 'services/backend-api.yaml' })

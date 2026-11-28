@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -347,10 +348,35 @@ func (q *Queue) Sweep(ctx context.Context) (requeued, unknown int, err error) {
 		return 0, 0, fmt.Errorf("sweep: mark unknown: %w", err)
 	}
 	unknown = int(tag.RowsAffected())
+	// One event per leg taken away from its runner, in the same transaction, so
+	// the count is exactly the number of expiries that were applied.
+	// The insert runs in a savepoint: if it fails, only it is rolled back and
+	// the requeue and unknown changes still commit.
+	if requeued+unknown > 0 {
+		if err := recordExpiredLeases(ctx, tx, now, requeued+unknown); err != nil {
+			slog.Warn("could not record lease_expired events", "error", err.Error(), "count", requeued+unknown)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, 0, fmt.Errorf("sweep: %w", err)
 	}
 	return requeued, unknown, nil
+}
+
+// recordExpiredLeases inserts n lease_expired events inside a savepoint and
+// rolls back only the savepoint when the insert fails.
+func recordExpiredLeases(ctx context.Context, tx pgx.Tx, at any, n int) error {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := sp.Exec(ctx,
+		`INSERT INTO system_events (kind, at) SELECT 'lease_expired', coalesce($1::timestamptz, now())
+		 FROM generate_series(1, $2::int)`, at, n); err != nil {
+		_ = sp.Rollback(ctx)
+		return err
+	}
+	return sp.Commit(ctx)
 }
 
 // jsonOrNull makes empty data SQL NULL, since an empty string is not valid JSON.

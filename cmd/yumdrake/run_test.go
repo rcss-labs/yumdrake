@@ -397,6 +397,7 @@ func TestWatchPrintsEachChangeOnceAndLogsOnRequest(t *testing.T) {
 	f.stream(
 		frame("state", "", stateBody("running", "", leg(100, "roll-backends", "orders", "pending", ""), running)),
 		frame("log", "c1", logs("deploying billing")),
+		frame("ping", "", map[string]any{}),                                                                       // the server's keep-alive: printed as nothing
 		frame("state", "", stateBody("running", "", leg(100, "roll-backends", "orders", "pending", ""), running)), // nothing changed
 		frame("state", "", stateBody("running", "", leg(100, "roll-backends", "orders", "running", ""), failed)),
 		frame("end", "", stateBody("failed", "1 service failed", failed)),

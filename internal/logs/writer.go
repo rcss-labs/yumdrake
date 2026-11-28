@@ -56,6 +56,8 @@ type legBuffer struct {
 	next       int64 // sequence of the next line to number
 	inflight   []store.LogLine
 	inflightGn int64
+	// failedSends counts the failed sends of the batch in flight.
+	failedSends int
 }
 
 // Writer collects the lines runners produce and stores them in batches. It
@@ -146,10 +148,15 @@ func (w *Writer) Write(runID, legID, generation int64, level, text string) error
 				w.log.Error("log queue of a leg is full and PostgreSQL is not taking lines; line refused",
 					"run", runID, "leg", legID, "queued", w.maxQueued)
 				w.mu.Lock()
+				firstRefusal := false
 				if cur := w.legs[legID]; cur != nil {
+					firstRefusal = !cur.refusing
 					cur.refusing = true
 				}
 				w.mu.Unlock()
+				if firstRefusal {
+					go w.recordPersistFailure() // the database is not taking lines; do not hold the executor
+				}
 				return ErrBufferFull
 			}
 			time.Sleep(fullPollInterval)
@@ -280,9 +287,27 @@ func (w *Writer) flushLeg(ctx context.Context, legID int64, lb *legBuffer) error
 		// A failed batch stays in flight and is sent again, with the same
 		// numbers, before any later batch of this leg.
 		if err := w.sendBatch(ctx, legID, lb); err != nil {
+			lb.failedSends++
+			if lb.failedSends == persistFailureThreshold {
+				w.recordPersistFailure()
+			}
 			return err
 		}
 		lb.inflight = nil
+		lb.failedSends = 0
+	}
+}
+
+// recordPersistFailure counts one failure to persist log lines for the
+// metrics. A batch that fails persistFailureThreshold times in a row counts
+// once, however long it keeps failing, and so does the first line refused
+// because a leg's queue is full. Recording is best effort: with the database
+// down it fails too, and that is logged only.
+func (w *Writer) recordPersistFailure() {
+	ctx, cancel := context.WithTimeout(context.Background(), persistRecordTimeout)
+	defer cancel()
+	if err := store.RecordEvent(ctx, w.pool, "log_persist_failed", w.now()); err != nil {
+		w.log.Warn("could not record the log persistence failure", "error", err)
 	}
 }
 
@@ -430,3 +455,9 @@ func cutText(text string) string {
 	}
 	return text[:cut] + truncationMarker
 }
+
+// persistFailureThreshold is how many failed sends of the same batch count as
+// a failure to persist (see recordPersistFailure).
+const persistFailureThreshold = 3
+
+const persistRecordTimeout = 3 * time.Second

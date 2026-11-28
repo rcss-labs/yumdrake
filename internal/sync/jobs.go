@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/rcss-labs/yamdrake/internal/github"
 	"github.com/rcss-labs/yamdrake/internal/spec"
 	"github.com/rcss-labs/yamdrake/internal/store"
 )
@@ -104,6 +105,7 @@ func (e *Engine) syncJob(ctx context.Context, jobSourceID int64) error {
 		e.recordSyncError(ctx, what, err, func(message string, at time.Time) error {
 			return store.SetJobSyncError(ctx, e.pool, job.ID, message, at)
 		})
+		e.recordGitHubCheck(ctx, job.Repo, err)
 		return e.sourceError(what, err, append(attrs, "job_source_id", job.ID, "repo", job.Repo)...)
 	}
 	// SourceFor errors are stored and shown to users as they are: the
@@ -116,6 +118,7 @@ func (e *Engine) syncJob(ctx context.Context, jobSourceID int64) error {
 	if err != nil {
 		return fail("read job branch head", err, "branch", job.Branch)
 	}
+	e.recordGitHubCheck(ctx, job.Repo, nil)
 	if err := store.ClearJobSyncError(ctx, e.pool, job.ID); err != nil {
 		return err
 	}
@@ -257,6 +260,35 @@ func (e *Engine) recordSyncError(ctx context.Context, what string, err error, sa
 	message := truncateMessage("source error: "+what+": "+err.Error(), maxSyncErrorLength)
 	if serr := save(message, e.now()); serr != nil {
 		e.log.Warn("could not record sync error", "error", serr.Error())
+	}
+	// A system event counts the failure; failing to record it changes nothing.
+	if serr := store.RecordEvent(ctx, e.pool, "sync_failed", e.now()); serr != nil {
+		e.log.Warn("could not record sync failure event", "error", serr.Error())
+	}
+}
+
+// recordGitHubCheck stores when the GitHub connection for repo's owner last
+// worked, or its error code. A missing file means GitHub answered, so it counts
+// as working. A cancelled context is not recorded. Failing to record is logged
+// only and never changes the sync's result.
+func (e *Engine) recordGitHubCheck(ctx context.Context, repo string, err error) {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	owner, _, _ := strings.Cut(repo, "/")
+	at := e.now()
+	var rateLimit *github.RateLimitError
+	var rerr error
+	switch {
+	case err == nil || errors.Is(err, github.ErrNotFound):
+		rerr = store.RecordConnectionOK(ctx, e.pool, "github", owner, at)
+	case errors.As(err, &rateLimit):
+		rerr = store.RecordConnectionError(ctx, e.pool, "github", owner, "RateLimited", at)
+	default:
+		rerr = store.RecordConnectionError(ctx, e.pool, "github", owner, "RequestFailed", at)
+	}
+	if rerr != nil {
+		e.log.Warn("could not record connection check", "kind", "github", "error", rerr.Error())
 	}
 }
 

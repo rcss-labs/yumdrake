@@ -35,6 +35,12 @@ import type {
   JobSummary,
   JobVersions,
   Me,
+  Overview,
+  QueueView,
+  RunningCell,
+  RunningMatrix,
+  ServicePage,
+  SystemHealth,
   Problem,
   RunDetail,
   JobGroup,
@@ -624,6 +630,182 @@ function versionsOfJob(job: StoredJob, environment: string): JobVersions {
 
 function isActiveFreeze(freeze: Freeze): boolean {
   return freeze.ended_at === null && Date.parse(freeze.expires_at) > Date.parse(now())
+}
+
+// ---- Overview fixture (Plan 9) ---------------------------------------------------------------
+
+/** A period of `days` days ending 2026-11-28 with a fixed shape; exported so tests can read the numbers. */
+export function overviewFixture(days: number, label = ''): Overview {
+  const end = Date.UTC(2026, 10, 28)
+  const list = Array.from({ length: days }, (_, index) => {
+    const date = new Date(end - (days - 1 - index) * 86_400_000).toISOString().slice(0, 10)
+    return { date, succeeded: index % 3 === 0 ? 0 : 2, failed: index % 5 === 0 ? 1 : 0, other: index === 1 ? 1 : 0 }
+  })
+  const total = list.reduce((sum, day) => sum + day.succeeded + day.failed + day.other, 0)
+  return {
+    from: list[0]?.date ?? '',
+    to: list[list.length - 1]?.date ?? '',
+    runs: total,
+    prev_runs: total - 3,
+    success_rate: 0.8,
+    prev_success_rate: 0.85,
+    median_duration_seconds: 134,
+    prev_median_duration_seconds: 150,
+    waiting_approval: 1,
+    oldest_waiting: '2026-11-28T10:00:00Z',
+    days: list,
+    top_failing: [{ service: 'billing-api', failures: 3, common_reason: 'Health check failed' }],
+    attention: [
+      {
+        run_id: 41,
+        state: 'failed',
+        job: 'deploy-billing',
+        environment: label === '' ? 'hetzner-01' : `${label}-01`,
+        label: label === '' ? 'dev' : label,
+        reason: 'billing-api did not become healthy',
+        by: 'Ada',
+        at: '2026-11-28T09:00:00Z',
+      },
+    ],
+    environments: [
+      { environment: 'hetzner-01', label: 'dev', run_id: 41, state: 'failed', job: 'deploy-billing', at: '2026-11-28T09:00:00Z' },
+      { environment: 'preprod-01', label: 'preprod', run_id: null, state: 'failed', job: '', at: null },
+    ],
+  }
+}
+
+/** A cell that is running `version`, deployed by run #12 unless said otherwise. */
+export function runningCell(version: string, over: Partial<RunningCell> = {}): RunningCell {
+  return {
+    state: 'ok',
+    version,
+    task_definition: `billing-api:${version.replace(/\D/g, '') || '1'}`,
+    by_yumdrake: true,
+    run_id: 12,
+    last_deploy_failed: false,
+    behind: false,
+    error: '',
+    read_at: '2026-11-28T11:58:00Z',
+    ...over,
+  }
+}
+
+export const absentCell: RunningCell = {
+  state: 'absent',
+  version: '',
+  task_definition: '',
+  by_yumdrake: false,
+  run_id: 0,
+  last_deploy_failed: false,
+  behind: false,
+  error: '',
+  read_at: '',
+}
+
+/** The default answer of GET /api/v1/versions/running: two environments of different labels. */
+export function runningFixture(): RunningMatrix {
+  return {
+    environments: [
+      { name: 'hetzner-01', label: 'dev', aws_account: '111111111111' },
+      { name: 'prod-01', label: 'prod', aws_account: '333333333333' },
+    ],
+    rows: [
+      { service: 'backend-api', cells: [runningCell('1.4.2'), runningCell('1.4.2')] },
+      { service: 'billing', cells: [runningCell('2.0.1'), absentCell] },
+    ],
+  }
+}
+
+/** The default answer of GET /api/v1/queue: two runners, one run running, one waiting on it, one lock. */
+export function queueFixture(): QueueView {
+  return {
+    runs: [
+      {
+        id: 41,
+        job_id: 'deploy-billing',
+        job_name: 'Deploy billing',
+        environment: 'hetzner-01',
+        label: 'dev',
+        state: 'running',
+        wait_reason: '',
+        blocked_by_run_id: null,
+        waiting_since: '2026-11-28T11:50:00Z',
+        waited_seconds: 0,
+        legs_running: 1,
+        legs_queued: 0,
+      },
+      {
+        id: 42,
+        job_id: 'deploy-backend',
+        job_name: 'Deploy backend',
+        environment: 'hetzner-01',
+        label: 'dev',
+        state: 'queued',
+        wait_reason: 'waiting for run #41',
+        blocked_by_run_id: 41,
+        waiting_since: '2026-11-28T11:58:00Z',
+        waited_seconds: 134,
+        legs_running: 0,
+        legs_queued: 2,
+      },
+    ],
+    locks: [{ resource: 'ecs:111111111111:eu-west-1:cluster/main:service/billing-api', run_id: 41, acquired_at: '2026-11-28T11:50:00Z' }],
+    runners: [
+      { id: 'runner-a', version: '0.9.0', concurrency: 8, busy: 3, started_at: '2026-11-28T08:00:00Z', last_seen_at: '2026-11-28T11:59:55Z' },
+      { id: 'runner-b', version: '0.9.0', concurrency: 8, busy: 2, started_at: '2026-11-28T08:00:00Z', last_seen_at: '2026-11-28T11:59:58Z' },
+    ],
+    free_slots: 11,
+    queued_legs: 2,
+    oldest_queued_at: '2026-11-28T11:58:00Z',
+    runner_gone_after_seconds: 120,
+  }
+}
+
+/** The default answer of GET /api/v1/system/health: everything works. */
+export function healthFixture(): SystemHealth {
+  const queue = queueFixture()
+  return {
+    problems: [],
+    runners: queue.runners,
+    runner_gone_after_seconds: 120,
+    queue: { queued_legs: 2, oldest_queued_at: queue.oldest_queued_at, active_runs: 2 },
+    counters: {
+      lease_expired: { hour: 0, day: 1 },
+      log_persist_failed: { hour: 0, day: 0 },
+      sync_failed: { hour: 0, day: 2 },
+    },
+    sync: {
+      inventory: { checked_at: '2026-11-28T11:57:00Z', error: '', error_at: null },
+      jobs: [{ id: 1, job_id: 'deploy-billing', title: 'Deploy billing', checked_at: '2026-11-28T11:55:00Z', error: '', error_at: null }],
+    },
+    connections: [
+      { kind: 'aws', name: 'homelab', last_ok_at: '2026-11-28T11:59:00Z', last_error_at: null, last_error_code: '', failing: false },
+      { kind: 'github', name: 'rcss-labs', last_ok_at: '2026-11-28T11:56:00Z', last_error_at: null, last_error_code: '', failing: false },
+    ],
+    notifications: { pending: 0, failed_last_day: 0, oldest_pending_at: null },
+  }
+}
+
+/** The default answer of GET /api/v1/services/{name}. */
+export function servicePageFixture(service: ServicePage['service']): ServicePage {
+  return {
+    service,
+    environments: [
+      { environment: 'hetzner-01', label: 'dev', cell: runningCell('1.4.2'), restore_from_run_id: 12, restore_from_folder_id: 1 },
+      { environment: 'prod-01', label: 'prod', cell: runningCell('1.4.1', { by_yumdrake: false, run_id: 0 }), restore_from_run_id: null, restore_from_folder_id: null },
+    ],
+    deployments: [
+      { run_id: 12, leg_id: 301, environment: 'hetzner-01', version: '1.4.2', state: 'succeeded', at: '2026-11-28T11:00:00Z', by: 'Ada' },
+    ],
+    config: [
+      {
+        run_id: 12,
+        environment: 'hetzner-01',
+        at: '2026-11-28T11:00:00Z',
+        items: [{ kind: 'env_file', name: 'app.env', destination: '/etc/app/app.env', checksum: 'a1b2c3d4e5f6' }],
+      },
+    ],
+  }
 }
 
 // ---- The handlers --------------------------------------------------------------------------
@@ -1508,11 +1690,11 @@ export const handlers: HttpHandler[] = [
           run_id: run.id,
           job_source_id: run.job_source_id,
           job_id: run.job_id,
-          job_name: run.job_name ?? run.job_id,
+          job_name: run.job_name || run.job_id,
           environment: run.environment,
           label: run.label,
           manifest_id: run.manifest_id,
-          requested_by_name: run.approval?.requested_by_name ?? run.requested_by_name ?? '',
+          requested_by_name: run.approval?.requested_by_name ?? run.requested_by_name,
           requested_at: run.approval?.requested_at ?? run.created_at,
           expires_at: run.approval?.expires_at ?? '',
           versions: Object.entries(serviceVersionsOf(run)).map(([service, version]) => ({ service, version })),
@@ -1623,5 +1805,28 @@ export const handlers: HttpHandler[] = [
       return json({ ok: false, code: 'not_configured' })
     }
     return json(channel.includes('missing') ? { ok: false, code: 'channel_not_found' } : { ok: true, code: '' })
+  }),
+
+  // ---- Running versions and the service page (Plan 9) ----
+  route('GET', '/api/v1/versions/running', view, ({ url, me }) => {
+    if (url.searchParams.get('refresh') === '1' && me && !can(me, 'manage_connections')) {
+      return errorResponse(403, 'forbidden', 'You do not have permission to do this')
+    }
+    return json(runningFixture())
+  }),
+
+  route('GET', '/api/v1/services/:name', view, ({ params }) => {
+    const service = state.services.find((candidate) => candidate.name === params.name)
+    return service ? json(servicePageFixture(service)) : notFound('service')
+  }),
+
+  // ---- Queue and system health (Plan 9) ----
+  route('GET', '/api/v1/queue', view, () => json(queueFixture())),
+  route('GET', '/api/v1/system/health', manageConnections, () => json(healthFixture())),
+
+  // ---- Overview (Plan 9) ----
+  route('GET', '/api/v1/analytics/overview', view, ({ url }) => {
+    const days = Number(url.searchParams.get('days') ?? '14')
+    return json(overviewFixture(days, url.searchParams.get('label') ?? ''))
   }),
 ]

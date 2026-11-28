@@ -19,6 +19,7 @@ const navGroups: NavItem[][] = [
     { to: '/', label: 'Overview', icon: 'overview' },
     { to: '/jobs', label: 'Jobs', icon: 'jobs' },
     { to: '/runs', label: 'Runs', icon: 'runs' },
+    { to: '/queue', label: 'Queue', icon: 'queue' },
     { to: '/approvals', label: 'Approvals', icon: 'approvals' },
   ],
   [

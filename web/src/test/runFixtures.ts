@@ -29,6 +29,7 @@ import type {
   RunSummaryCounts,
   Selection,
 } from '../api/types'
+import { serviceProgress } from '../features/runs/runModel'
 
 export const mockNow = '2026-11-27T12:00:00Z'
 
@@ -67,16 +68,9 @@ export function summarizeLegs(legs: RunLeg[]): RunSummaryCounts {
   return { counts, failures }
 }
 
-// Which leg state speaks for a service in a list row: the most worrying one first.
-const chipPriority: LegState[] = ['failed', 'unknown', 'running', 'claimed', 'queued', 'pending', 'cancelled', 'skipped', 'succeeded']
-
+// The list row's services are the run page's service progress, as the server computes them with the same rule.
 function serviceChips(run: RunDetail): RunServiceChip[] {
-  const services = [...new Set(run.legs.filter((leg) => leg.kind === 'step').map((leg) => leg.service))]
-  return services.map((service) => {
-    const mine = run.legs.filter((leg) => leg.kind === 'step' && leg.service === service)
-    const state = chipPriority.find((candidate) => mine.some((leg) => leg.state === candidate)) ?? 'pending'
-    return { service, version: mine[0]?.version ?? '', state }
-  })
+  return serviceProgress(run).map(({ service, version, status }) => ({ service, version, state: status }))
 }
 
 /** The list row of a stored run (the list adds services and the summary; the detail has more). */
@@ -370,7 +364,7 @@ export function buildPlan(
 /** Log lines for a run: one run-level line, then a start line, a result line for every leg that started. */
 export function buildLogLines(run: RunDetail): ApiLogLine[] {
   const lines: ApiLogLine[] = [
-    { leg_id: 0, seq: 1, at: run.created_at, level: 'info', text: `Run #${run.id} created by ${run.requested_by_name ?? 'someone'}` },
+    { leg_id: 0, seq: 1, at: run.created_at, level: 'info', text: `Run #${run.id} created by ${run.requested_by_name}` },
   ]
   const seqs = new Map<number, number>()
   const next = (legId: number) => {

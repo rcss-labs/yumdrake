@@ -1,0 +1,175 @@
+.versions-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.versions-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--ink2);
+}
+
+/* The table scrolls sideways inside its card; the page never does. */
+.versions-scroll {
+  overflow-x: auto;
+}
+.versions-table th,
+.versions-table td {
+  white-space: nowrap;
+}
+.ui-table th.versions-service-col,
+.ui-table td.versions-service-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-shadow: inset -1px 0 0 var(--line);
+}
+.ui-table td.versions-service-col {
+  background: Canvas;
+}
+.ui-table th.versions-service-col {
+  z-index: 2;
+}
+.versions-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.versions-head .mono {
+  color: var(--ink);
+}
+.versions-svc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 500;
+}
+.versions-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink3);
+  cursor: pointer;
+}
+.versions-toggle:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+.versions-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s var(--ease);
+}
+.versions-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.versions-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.versions-muted {
+  color: var(--ink3);
+}
+.versions-error {
+  color: var(--bad-t);
+}
+.versions-count {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--ink2);
+}
+.versions-empty {
+  margin: 0;
+  padding: 20px;
+  color: var(--ink2);
+}
+
+/* Markers: a shape and words, so colour is never the only signal. */
+.versions-mark,
+.versions-mark-words {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.versions-shape {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.versions-shape[data-marker='behind'] {
+  stroke: var(--wait-t);
+}
+.versions-shape[data-marker='failed'] {
+  stroke: var(--bad);
+}
+.versions-shape[data-marker='outside'] {
+  stroke: var(--ink3);
+}
+.versions-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The row detail. */
+.ui-table td.versions-detail-cell {
+  background: color-mix(in srgb, var(--bg) 55%, Canvas);
+  white-space: normal;
+}
+.versions-detail {
+  position: sticky;
+  left: 16px;
+  max-width: calc(100vw - 96px);
+}
+.versions-detail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 24px;
+}
+.versions-detail li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.versions-detail-env {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.versions-detail-line {
+  color: var(--ink2);
+}

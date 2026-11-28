@@ -51,8 +51,9 @@ const (
 
 // Server is a running fake GitHub.
 type Server struct {
-	ts    *httptest.Server
-	token string
+	ts      *httptest.Server // nil for NewUnstarted
+	handler http.Handler
+	token   string
 
 	mu          sync.Mutex
 	commits     map[string]map[string]map[string][]byte // repo -> sha -> path -> content
@@ -64,6 +65,15 @@ type Server struct {
 
 // New starts a fake that accepts only "Authorization: Bearer <token>".
 func New(token string) *Server {
+	s := NewUnstarted(token)
+	s.ts = httptest.NewServer(s.handler)
+	return s
+}
+
+// NewUnstarted builds a fake without starting a server: the caller serves
+// Handler on a listener of its own (the demo does). URL then answers "" and
+// Close does nothing.
+func NewUnstarted(token string) *Server {
 	s := &Server{
 		token:    token,
 		commits:  map[string]map[string]map[string][]byte{},
@@ -75,15 +85,27 @@ func New(token string) *Server {
 	mux.HandleFunc("GET /repos/{owner}/{name}/branches/{branch...}", s.endpoint(EndpointBranches, s.handleBranch))
 	mux.HandleFunc("GET /repos/{owner}/{name}/git/trees/{sha}", s.endpoint(EndpointTrees, s.handleTree))
 	mux.HandleFunc("GET /repos/{owner}/{name}/contents/{path...}", s.endpoint(EndpointContents, s.handleContents))
-	s.ts = httptest.NewServer(mux)
+	s.handler = mux
 	return s
 }
 
-// URL is the base URL to give internal/github.New.
-func (s *Server) URL() string { return s.ts.URL }
+// Handler is the fake's HTTP handler.
+func (s *Server) Handler() http.Handler { return s.handler }
 
-// Close stops the server.
-func (s *Server) Close() { s.ts.Close() }
+// URL is the base URL to give internal/github.New ("" when not started).
+func (s *Server) URL() string {
+	if s.ts == nil {
+		return ""
+	}
+	return s.ts.URL
+}
+
+// Close stops the server it started, if any.
+func (s *Server) Close() {
+	if s.ts != nil {
+		s.ts.Close()
+	}
+}
 
 // AddCommit registers (or replaces) the full file tree of commit sha in repo
 // ("owner/name"). Paths use forward slashes. The map is copied.

@@ -681,7 +681,7 @@ func TestArchiveThenReadIsIdenticalToBefore(t *testing.T) {
 	}
 	e.seed(t, e.line(2, 1, baseTime.Add(500*time.Millisecond), "info", "live line"))
 
-	archive, err := NewDirArchive(t.TempDir())
+	archive, err := NewDirArchive(t.TempDir(), archiveTestCipher(t, "0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatalf("NewDirArchive: %v", err)
 	}
@@ -748,7 +748,7 @@ func TestArchiveFailureKeepsRows(t *testing.T) {
 	ctx := context.Background()
 	seedForArchive(t, e)
 	settle(t, e, "failed")
-	real, err := NewDirArchive(t.TempDir())
+	real, err := NewDirArchive(t.TempDir(), archiveTestCipher(t, "0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatalf("NewDirArchive: %v", err)
 	}
@@ -801,7 +801,7 @@ func TestArchiverIsIdempotent(t *testing.T) {
 
 func newDirArchiveT(t *testing.T) Archive {
 	t.Helper()
-	a, err := NewDirArchive(t.TempDir())
+	a, err := NewDirArchive(t.TempDir(), archiveTestCipher(t, "0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatalf("NewDirArchive: %v", err)
 	}
@@ -1319,5 +1319,58 @@ func TestUnfilteredPageReadsOnlyAPageOfRowsPerLeg(t *testing.T) {
 		if scanned > 10*limit {
 			t.Fatalf("the query scanned %d log_lines rows for a page of %d (cursor %v); it must stop after the page", scanned, limit, cursor)
 		}
+	}
+}
+
+func TestLogWriterRecordsPersistFailure(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, 1)
+	leg := e.legs[0].ID
+	w := newTestWriter(e, 10, nil)
+	t.Cleanup(func() { _ = w.Close(context.Background()) })
+	failing := atomic.Bool{}
+	failing.Store(true)
+	w.beforeInsert = func() error {
+		if failing.Load() {
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	events := func() int {
+		t.Helper()
+		n, err := store.CountEvents(context.Background(), e.pool, "log_persist_failed", time.Time{})
+		if err != nil {
+			t.Fatalf("CountEvents: %v", err)
+		}
+		return n
+	}
+
+	w.Write(e.runID, leg, 0, "info", "line 1")
+	// The writer retries a batch; one or two failures are a blip, not a lost log.
+	for attempt := 1; attempt < persistFailureThreshold; attempt++ {
+		if err := w.Flush(context.Background(), leg); err == nil {
+			t.Fatalf("Flush %d: want the injected error", attempt)
+		}
+		if n := events(); n != 0 {
+			t.Fatalf("after %d failed attempts there are %d events, want none yet", attempt, n)
+		}
+	}
+	// The batch keeps failing: that is one event, however long it goes on.
+	for range 3 {
+		if err := w.Flush(context.Background(), leg); err == nil {
+			t.Fatal("Flush: want the injected error")
+		}
+	}
+	if n := events(); n != 1 {
+		t.Fatalf("after the batch kept failing there are %d events, want exactly 1", n)
+	}
+
+	// Recovery stores the batch and records nothing more.
+	failing.Store(false)
+	if err := w.Flush(context.Background(), leg); err != nil {
+		t.Fatalf("Flush after recovery: %v", err)
+	}
+	if n := events(); n != 1 {
+		t.Fatalf("after recovery there are %d events, want still 1", n)
 	}
 }

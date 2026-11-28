@@ -224,6 +224,9 @@ func TestResolveReturnsManifestListingTheSelection(t *testing.T) {
 	got := map[string]string{}
 	for _, s := range plan.Services {
 		got[s.Name] = s.Version
+		if s.PreviousTaskDefinition == "" {
+			t.Errorf("service %s has no previous task definition, so the service page could offer no restore", s.Name)
+		}
 	}
 	if len(got) != 2 || got["billing"] != "1.2.3" || got["search"] != "1.2.4" {
 		t.Errorf("manifest services = %v, want billing 1.2.3 and search 1.2.4", got)

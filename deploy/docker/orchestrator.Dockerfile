@@ -22,10 +22,14 @@ COPY --from=web /web/dist/ ./internal/webui/dist/
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-X github.com/rcss-labs/yamdrake/internal/version.Version=${VERSION} -X github.com/rcss-labs/yamdrake/internal/version.Commit=${COMMIT}" \
     -o /out/yumdrake-orchestrator ./cmd/orchestrator
+# The log archive directory is created here because the final image has no shell.
+RUN mkdir -p /out/log-archive
 
 # Final stage: distroless static, nonroot (tag gcr.io/distroless/static-debian12:nonroot).
 FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/yumdrake-orchestrator /yumdrake-orchestrator
+# Owned by the service user so a named volume mounted here inherits the ownership.
+COPY --from=build --chown=65532:65532 /out/log-archive /var/lib/yumdrake/log-archive
 USER 65532:65532
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 CMD ["/yumdrake-orchestrator","healthcheck"]

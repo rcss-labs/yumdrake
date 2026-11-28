@@ -9,7 +9,6 @@ const shownVersions = 3
 
 function Services({ run }: { run: RunSummary }) {
   const services = run.services
-  if (!services) return <span className="runs-quiet">Not available</span>
   if (services.length === 0) return <span className="runs-quiet">None</span>
   const succeeded = services.filter((service) => service.state === 'succeeded').length
   const versions = [...new Set(services.map((service) => service.version).filter(Boolean))]
@@ -36,7 +35,7 @@ function Services({ run }: { run: RunSummary }) {
 }
 
 function WhatFailed({ run }: { run: RunSummary }) {
-  const failures = run.summary?.failures ?? []
+  const failures = run.summary.failures
   return (
     <div className="runs-fail">
       {failures.slice(0, shownFailures).map((failure) => (
@@ -73,7 +72,7 @@ export function RunsTable({ runs, showJob }: { runs: RunSummary[]; showJob: bool
     columns.push({
       key: 'job',
       header: 'Job',
-      render: (run) => <Link to={`/jobs/${run.job_source_id}`}>{run.job_name || run.job_id || `Job #${run.job_source_id}`}</Link>,
+      render: (run) => <Link to={`/jobs/${run.job_source_id}`}>{run.job_name || run.job_id}</Link>,
     })
   }
   columns.push(
@@ -94,7 +93,7 @@ export function RunsTable({ runs, showJob }: { runs: RunSummary[]; showJob: bool
       className: 'runs-nowrap',
       render: (run) => (
         <>
-          {run.requested_by_name || `user #${run.requested_by}`}
+          {run.requested_by_name}
           <div className="runs-quiet">
             <Time iso={run.started_at ?? run.created_at} />
             {run.via && `, ${run.via}`}

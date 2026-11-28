@@ -3,22 +3,45 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 
 	valkey "github.com/valkey-io/valkey-go"
 )
 
-// Open builds a Valkey client for addr. Open attempts one dial; with
+// Options says how to reach Valkey.
+type Options struct {
+	Addr string
+	// Password is sent as AUTH for the default user; empty sends none.
+	Password string
+	// TLS connects over TLS when non-nil; nil means plaintext.
+	TLS *tls.Config
+}
+
+// TLSConfig returns a TLS configuration for addr that verifies the server
+// against the system roots under the host name in addr.
+func TLSConfig(addr string) *tls.Config {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
+}
+
+// Open builds a Valkey client for o.Addr. Open attempts one dial; with
 // ForceSingleClient a failed dial is tolerated and the client reconnects on
 // first use, so Open fails only for an address it cannot use.
-func Open(addr string) (valkey.Client, error) {
+func Open(o Options) (valkey.Client, error) {
+	addr := o.Addr
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		return nil, fmt.Errorf("cache: invalid Valkey address %q: %w", addr, err)
 	}
 	client, err := valkey.NewClient(valkey.ClientOption{
 		InitAddress:       []string{addr},
 		ForceSingleClient: true,
+		Password:          o.Password,
+		TLSConfig:         o.TLS,
 	})
 	// With ForceSingleClient the library returns a usable client alongside the
 	// initial dial error, so only a nil client is a real failure.

@@ -4,9 +4,9 @@
 // behind them.
 //
 // It is a test program. It is not built by make build, not in any image and not
-// started by anything but the webstack helper. cmd/runner never registers a fake
-// resolve or revalidate: it wires the real ones and has no switch to do
-// otherwise. The fakes here are still refused unless YUMDRAKE_ENV=dev and
+// started by anything but the webstack helper. cmd/runner now keeps all four
+// fakes under YUMDRAKE_FAKE_STEPS=true too; this program stays for its shorter
+// step times. The fakes are refused unless YUMDRAKE_ENV=dev and
 // YUMDRAKE_FAKE_STEPS=true (config.LoadRunner enforces it), as for any runner.
 package main
 
@@ -69,6 +69,7 @@ func serve(ctx context.Context) int {
 			q := queue.New(pool, cfg.Lease, nil)
 			r := runner.New(q, sink, cfg.RunnerID, cfg.Concurrency, cfg.Heartbeat, cfg.Poll, log).
 				WithShutdownTimeout(cfg.ShutdownTimeout).
+				WithRegistry(pool, 0).
 				WithSettledNotifier(func(runID int64) { bus.Publish(context.Background(), wake.TopicRuns, runID) })
 			fake.Register(r, fake.Options{StepTime: stepTime, SlowFor: slowFor})
 			log.Warn("every step is fake; nothing real will be changed")

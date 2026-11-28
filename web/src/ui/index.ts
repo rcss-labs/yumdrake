@@ -1,5 +1,8 @@
 export { Button, type ButtonProps } from './Button'
+export { BarChart, type BarChartDay, type BarChartProps, type BarChartSeries } from './BarChart'
 export { Card, type CardProps } from './Card'
+export { RankList, type RankItem, type RankListProps } from './RankList'
+export { StatTile, type StatTileProps } from './StatTile'
 export { Checkbox, type CheckboxProps } from './Checkbox'
 export { CodeBlock, type CodeBlockProps } from './CodeBlock'
 export { DataTable, type DataColumn, type DataTableProps } from './DataTable'

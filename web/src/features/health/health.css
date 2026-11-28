@@ -1,0 +1,34 @@
+.health-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.health-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.health-section h2 {
+  margin: 0;
+  padding: 16px 16px 8px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.health-facts {
+  padding: 0 16px 16px;
+}
+.health-note {
+  margin: 0;
+  padding: 0 16px 16px;
+  color: var(--ink2);
+  font-size: 14px;
+}
+.health-failed {
+  color: var(--bad-t);
+}
+.health-code {
+  display: block;
+  margin-top: 2px;
+}

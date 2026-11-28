@@ -143,6 +143,16 @@ type deployCall struct {
 type deployRecorder struct {
 	mu    sync.Mutex
 	calls []deployCall
+	// afterDeploy, when set, decides the outcome of an ecs-deploy stand-in
+	// after it recorded its call (the visibility test fails one service and
+	// writes the tagged task definition a real deploy would).
+	afterDeploy func(task queue.Claimed, call deployCall) queue.Outcome
+}
+
+func (d *deployRecorder) setAfterDeploy(f func(task queue.Claimed, call deployCall) queue.Outcome) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.afterDeploy = f
 }
 
 type stepFunc func(ctx context.Context, env runner.Env, task queue.Claimed) queue.Outcome
@@ -165,7 +175,11 @@ func (d *deployRecorder) executor(use string) runner.Executor {
 		}
 		d.mu.Lock()
 		d.calls = append(d.calls, call)
+		after := d.afterDeploy
 		d.mu.Unlock()
+		if use == "ecs-deploy" && after != nil {
+			return after(task, call)
+		}
 		return queue.Outcome{State: "succeeded"}
 	})
 }
@@ -183,6 +197,8 @@ type flociOpts struct {
 	// noVersionBranch leaves the config repository without a branch for the
 	// planned version, so only "dev" exists.
 	noVersionBranch bool
+	// orchestratorEnv adds settings to the orchestrator's environment.
+	orchestratorEnv map[string]string
 }
 
 type flociStack struct {
@@ -197,6 +213,9 @@ type flociStack struct {
 	artifactBucket string
 	envs           map[string]*seededEnv
 	rec            *deployRecorder
+	// stopRunner stops the in-process runner (also run by the cleanup); it
+	// returns once the runner has stopped.
+	stopRunner func()
 }
 
 func startFloci(t *testing.T, o flociOpts) *flociStack {
@@ -233,8 +252,11 @@ func startFloci(t *testing.T, o flociOpts) *flociStack {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 	databaseURL, keyPrefix := testdb.New(t), randomKeyPrefix(t)
-	base := startEngineOrchestrator(t, databaseURL, keyPrefix, valkeyAddr, s.gh.URL(), true,
-		map[string]string{"YUMDRAKE_AWS_ENDPOINT_URL": s.proxy.URL})
+	orchestratorEnv := map[string]string{"YUMDRAKE_AWS_ENDPOINT_URL": s.proxy.URL}
+	for k, v := range o.orchestratorEnv {
+		orchestratorEnv[k] = v
+	}
+	base := startEngineOrchestrator(t, databaseURL, keyPrefix, valkeyAddr, s.gh.URL(), true, orchestratorEnv)
 	s.api = signIn(t, base, databaseURL)
 	var err error
 	if s.pool, err = db.Open(context.Background(), databaseURL); err != nil {
@@ -377,7 +399,8 @@ func (s *flociStack) startRunner(databaseURL, keyPrefix, valkeyAddr string) {
 		bus.Publish(context.Background(), wake.TopicLogs, runID)
 	}, quiet)
 	r := runner.New(queue.New(pool, 10*time.Second, nil), sink, cfg.RunnerID, 8, 2*time.Second, 100*time.Millisecond, quiet).
-		WithShutdownTimeout(10 * time.Second).
+		WithShutdownTimeout(10*time.Second).
+		WithRegistry(pool, 500*time.Millisecond).
 		WithSettledNotifier(func(runID int64) { bus.Publish(context.Background(), wake.TopicRuns, runID) })
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := runnerapp.RegisterExecutors(ctx, quiet, cfg, pool, r); err != nil {
@@ -392,19 +415,23 @@ func (s *flociStack) startRunner(databaseURL, keyPrefix, valkeyAddr string) {
 		defer close(done)
 		_ = r.Run(ctx, nil)
 	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(30 * time.Second):
-			t.Error("the runner did not stop within 30s")
-		}
-		closeCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		_ = sink.Close(closeCtx)
-		pool.Close()
-		valkeyClient.Close()
-	})
+	var stopOnce sync.Once
+	s.stopRunner = func() {
+		stopOnce.Do(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Error("the runner did not stop within 30s")
+			}
+			closeCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			_ = sink.Close(closeCtx)
+			pool.Close()
+			valkeyClient.Close()
+		})
+	}
+	t.Cleanup(s.stopRunner)
 }
 
 // ---- API helpers ----

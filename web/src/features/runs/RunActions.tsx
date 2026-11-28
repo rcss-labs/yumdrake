@@ -16,7 +16,8 @@ import {
 } from './actions'
 import { failedChecks } from './planModel'
 import { useApprovals, useRunPlan } from './queries'
-import { changedServices, plural, selectionToRepeat, serviceProgress } from './runModel'
+import { restoreDialogCopy } from './restoreCopy'
+import { changedServices, selectionToRepeat, serviceProgress } from './runModel'
 
 type Confirming = 'start' | 'cancel' | 'discard' | 'reject' | 'restore'
 
@@ -195,9 +196,7 @@ export function RunActions({ run, reload }: RunActionsProps) {
       />
       <ConfirmDialog
         open={confirming === 'restore'}
-        title={`Restore ${plural(changed.length, 'service')}?`}
-        body={`This plans a restore of ${changed.join(', ')} to what they ran before. Nothing changes until you start the restore run.`}
-        confirmLabel="Plan the restore"
+        {...restoreDialogCopy(changed)}
         danger
         onConfirm={() => confirmThen(() => restore.mutateAsync({}), true)}
         onCancel={() => setConfirming(null)}

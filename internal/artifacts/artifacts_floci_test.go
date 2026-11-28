@@ -22,7 +22,7 @@ import (
 const region = "us-east-1"
 
 // newStore seeds a fresh account and bucket and returns a store over them.
-func newStore(t *testing.T, kmsKeyID string) (*artifacts.Store, *awstest.Account, string, *s3.Client) {
+func newStore(t *testing.T, kmsKeyID string) (*artifacts.S3Store, *awstest.Account, string, *s3.Client) {
 	t.Helper()
 	w := awstest.New(t)
 	acct := w.Account(awstest.RandomAccountID())

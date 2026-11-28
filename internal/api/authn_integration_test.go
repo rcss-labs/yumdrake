@@ -353,6 +353,7 @@ func TestEveryRouteEnforcesItsAction(t *testing.T) {
 		"PATCH /api/v1/jobs/{id}":                      auth.ManageJobs,
 		"POST /api/v1/jobs/{id}/sync":                  auth.ManageJobs,
 		"GET /api/v1/jobs/{id}/versions":               auth.View,
+		"GET /api/v1/versions/running":                 auth.View,
 		"GET /api/v1/admin/users":                      auth.ManageAccess,
 		"POST /api/v1/admin/users":                     auth.ManageAccess,
 		"POST /api/v1/admin/users/{id}/tokens":         auth.ManageAccess,
@@ -394,6 +395,10 @@ func TestEveryRouteEnforcesItsAction(t *testing.T) {
 		"GET /api/v1/admin/slack":                       auth.ManageConnections,
 		"PUT /api/v1/admin/slack":                       auth.ManageConnections,
 		"POST /api/v1/admin/slack/test":                 auth.ManageConnections,
+		"GET /api/v1/analytics/overview":                auth.View,
+		"GET /api/v1/queue":                             auth.View,
+		"GET /api/v1/services/{name}":                   auth.View,
+		"GET /api/v1/system/health":                     auth.ManageConnections,
 	}
 	if len(routes) != len(expected) {
 		t.Fatalf("routes() has %d routes, the expected table %d", len(routes), len(expected))

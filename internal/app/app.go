@@ -143,6 +143,17 @@ func Serve(ctx context.Context, log *slog.Logger, shutdownTimeout time.Duration,
 	return errors.Join(errs...)
 }
 
+// CacheOptions builds the Valkey client options from the configuration: the
+// address, the optional password and, when ValkeyTLS is set, TLS verified
+// against the system roots.
+func CacheOptions(c config.Common) cache.Options {
+	o := cache.Options{Addr: c.ValkeyAddr, Password: c.ValkeyPassword.Reveal()}
+	if c.ValkeyTLS {
+		o.TLS = cache.TLSConfig(c.ValkeyAddr)
+	}
+	return o
+}
+
 // newHTTPServer returns the server with the shared timeouts. It deliberately
 // sets no WriteTimeout: a server-wide write deadline would cut off long-lived
 // responses such as Server-Sent Events streams.
@@ -255,7 +266,7 @@ func Run(ctx context.Context, svc Service, stdout io.Writer) int {
 		}
 	}
 
-	client, err := cache.Open(svc.Common.ValkeyAddr)
+	client, err := cache.Open(CacheOptions(svc.Common))
 	if err != nil {
 		log.Error("valkey client unavailable", "error", err.Error())
 		return ExitFailure

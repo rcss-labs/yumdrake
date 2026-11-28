@@ -1,6 +1,8 @@
 // The panel under a run that did not finish well: what failed, in which step, why, and a way to its log.
+import { Link } from 'react-router-dom'
 import type { RunDetail } from '../../api/types'
 import { Button } from '../../ui'
+import { servicePath } from '../service/servicePath'
 import type { ConsoleScope } from './scope'
 import { wholeRun } from './scope'
 
@@ -50,7 +52,13 @@ export function WhatFailed({ run, onShowLog }: WhatFailedProps) {
             {failures.map((failure) => (
               <tr key={failure.leg_id}>
                 <td data-label="Failed">
-                  <span className="mono run-fail-what">{failure.service || failure.step || 'Run'}</span>
+                  {failure.service ? (
+                    <Link className="mono run-fail-what" to={servicePath(failure.service)}>
+                      {failure.service}
+                    </Link>
+                  ) : (
+                    <span className="mono run-fail-what">{failure.step || 'Run'}</span>
+                  )}
                   <div className="run-fail-sub">{failure.state === 'unknown' ? 'Outcome not confirmed' : failure.service ? 'Service' : 'Step'}</div>
                 </td>
                 <td className="mono" data-label="In step">{failure.step || failure.kind}</td>
@@ -67,7 +75,7 @@ export function WhatFailed({ run, onShowLog }: WhatFailedProps) {
       </div>
       {Array.from(skippedByService, ([service, steps]) => (
         <p key={service} className="run-fail-skipped">
-          {service}: {joined(steps)} {steps.length === 1 ? 'was' : 'were'} skipped
+          <Link to={servicePath(service)}>{service}</Link>: {joined(steps)} {steps.length === 1 ? 'was' : 'were'} skipped
         </p>
       ))}
     </section>

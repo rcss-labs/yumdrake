@@ -60,3 +60,41 @@ export async function stubPlanRoutes(page: Page) {
     })
   })
 }
+
+const readAt = '2026-11-28T09:00:00Z'
+const cell = (version: string, extra: Partial<Record<'by_yumdrake' | 'last_deploy_failed' | 'behind', boolean>> & { run_id?: number } = {}) => ({
+  state: 'ok',
+  version,
+  task_definition: `app:${version.replace(/\D/g, '') || '1'}`,
+  by_yumdrake: true,
+  run_id: 0,
+  last_deploy_failed: false,
+  behind: false,
+  error: '',
+  read_at: readAt,
+  ...extra,
+})
+
+/**
+ * What the Versions screen reads. The webstack's orchestrator cannot reach AWS (its endpoint is an unreachable
+ * local address, so no request ever reaches the real one), so this matrix is the only part of the visibility
+ * screens that is stubbed: backend-api is behind in dev and failed there, billing was changed outside Yumdrake,
+ * orders matches in both environments.
+ */
+export async function stubRunningVersions(page: Page) {
+  await page.route('**/api/v1/versions/running*', (route) =>
+    route.fulfill({
+      json: {
+        environments: [
+          { name: 'hetzner-01', label: 'dev', aws_account: '111111111111' },
+          { name: 'hetzner-02', label: 'dev', aws_account: '111111111111' },
+        ],
+        rows: [
+          { service: 'backend-api', cells: [cell('1.2.0', { behind: true, last_deploy_failed: true, run_id: 7 }), cell('1.3.0', { run_id: 8 })] },
+          { service: 'billing', cells: [cell('2.0.0', { by_yumdrake: false }), cell('2.0.0', { run_id: 9 })] },
+          { service: 'orders', cells: [cell('4.1.0', { run_id: 10 }), cell('4.1.0', { run_id: 11 })] },
+        ],
+      },
+    }),
+  )
+}
