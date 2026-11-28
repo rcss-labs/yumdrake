@@ -795,7 +795,7 @@ func TestSSOSettingsValidation(t *testing.T) {
 // deadValkey is a client for an address nothing listens on.
 func deadValkey(t *testing.T) valkey.Client {
 	t.Helper()
-	c, err := cache.Open("127.0.0.1:1")
+	c, err := cache.Open(cache.Options{Addr: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}

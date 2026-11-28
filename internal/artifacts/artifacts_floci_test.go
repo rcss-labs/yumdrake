@@ -22,14 +22,14 @@ import (
 const region = "us-east-1"
 
 // newStore seeds a fresh account and bucket and returns a store over them.
-func newStore(t *testing.T, kmsKeyID string) (*artifacts.Store, *awstest.Account, string, *s3.Client) {
+func newStore(t *testing.T, kmsKeyID string) (*artifacts.S3Store, *awstest.Account, string, *s3.Client) {
 	t.Helper()
 	w := awstest.New(t)
 	acct := w.Account(awstest.RandomAccountID())
 	bucket := "yd-artifacts-" + awstest.RandomSuffix()
 	acct.Bucket(bucket, false)
 	client := s3.NewFromConfig(acct.AWSConfig(region), func(o *s3.Options) { o.UsePathStyle = true })
-	return artifacts.New(client, bucket, kmsKeyID), acct, bucket, client
+	return artifacts.NewS3(client, bucket, kmsKeyID), acct, bucket, client
 }
 
 func sum(b []byte) string {
@@ -81,7 +81,7 @@ func TestPutEncryptsWithKMSKeyWhenGiven(t *testing.T) {
 	keyID := acct.KMSKey(region)
 	client := s3.NewFromConfig(acct.AWSConfig(region), func(o *s3.Options) { o.UsePathStyle = true })
 
-	key, digest, err := artifacts.New(client, bucket, keyID).Put(ctx, 1, "web", "values", "a.yaml", false, []byte("a: 1\n"))
+	key, digest, err := artifacts.NewS3(client, bucket, keyID).Put(ctx, 1, "web", "values", "a.yaml", false, []byte("a: 1\n"))
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestPutEncryptsWithKMSKeyWhenGiven(t *testing.T) {
 	if head.ServerSideEncryption != s3types.ServerSideEncryptionAwsKms || !strings.Contains(aws.ToString(head.SSEKMSKeyId), keyID) {
 		t.Errorf("encryption = %q key %q, want aws:kms with %q", head.ServerSideEncryption, aws.ToString(head.SSEKMSKeyId), keyID)
 	}
-	if _, err := artifacts.New(client, bucket, keyID).Get(ctx, key, digest); err != nil {
+	if _, err := artifacts.NewS3(client, bucket, keyID).Get(ctx, key, digest); err != nil {
 		t.Errorf("Get: %v", err)
 	}
 }
@@ -132,7 +132,7 @@ func TestPreviousCopiesUseSeparateKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put previous: %v", err)
 	}
-	if want := "manifests/9/web/values/previous/app.yaml"; prevKey != want {
+	if want := "manifests/9/web/previous/values/app.yaml"; prevKey != want {
 		t.Errorf("previous key = %q, want %q", prevKey, want)
 	}
 	if curKey == prevKey {

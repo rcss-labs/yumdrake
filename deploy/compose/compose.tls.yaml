@@ -1,0 +1,51 @@
+# HTTPS front. Used together with compose.yaml (see COMPOSE_FILE in .env.example).
+# It is an override, not a profile, so that exactly one service publishes a
+# port in each mode: here the caddy front does, and the orchestrator does not.
+# Needs Docker Compose v2.24 or newer for `!reset`.
+services:
+  orchestrator:
+    ports: !reset []
+
+  caddy:
+    image: ${YUMDRAKE_CADDY_IMAGE:-yumdrake-caddy:local}
+    build:
+      context: ./caddy
+    restart: unless-stopped
+    environment:
+      YUMDRAKE_PUBLIC_HOST: ${YUMDRAKE_PUBLIC_HOST:?set YUMDRAKE_PUBLIC_HOST in .env (the DNS name of this host, for example yumdrake.example.com)}
+      # The redirect from HTTP goes to this address, so it keeps a non-443 port.
+      YUMDRAKE_PUBLIC_URL: ${YUMDRAKE_PUBLIC_URL:?set YUMDRAKE_PUBLIC_URL in .env (https://<host>, with the port when it is not 443)}
+    ports:
+      - "${YUMDRAKE_HTTPS_PORT:-443}:443"
+      - "${YUMDRAKE_HTTP_REDIRECT_PORT:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    # The Caddy binary carries the file capability net_bind_service (to bind 80
+    # and 443 as a non-root user); with every capability dropped it could not
+    # even start. This is the one capability added back.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -28,7 +28,7 @@ func TestUnlockClearsOnlyThatEmailsFailureCounterAndAuditsIt(t *testing.T) {
 		t.Fatalf("create-admin = %d (stderr %q)", got.code, got.stderr)
 	}
 	other := uniqueEmail(t)
-	valkeyClient, err := cache.Open(valkeyAddr(t))
+	valkeyClient, err := cache.Open(cache.Options{Addr: valkeyAddr(t)})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}

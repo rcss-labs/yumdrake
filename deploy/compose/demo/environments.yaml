@@ -1,0 +1,21 @@
+# Demo inventory: two made-up AWS accounts, five environments. Nothing here exists.
+# Labels are fixed by Yumdrake (dev, preprod, prod): only dev is "dev", so the
+# dev-only rules (such as the config fallback) apply to that environment alone.
+apiVersion: yumdrake/v1
+kind: Environments
+environments:
+  - name: dev
+    label: dev
+    aws_account: "111111111111"
+  - name: qa
+    label: preprod
+    aws_account: "111111111111"
+  - name: staging
+    label: preprod
+    aws_account: "111111111111"
+  - name: preprod
+    label: preprod
+    aws_account: "222222222222"
+  - name: prod
+    label: prod
+    aws_account: "222222222222"

@@ -70,7 +70,7 @@ func TestRevalidateDetectsHandDeploy(t *testing.T) {
 		GitHub: func(context.Context, string) (resolve.Source, error) {
 			return nil, github.ErrNotFound // no env files in this test
 		},
-		Artifacts: artifacts.New(artifactClient, artifactBucket, ""),
+		Artifacts: artifacts.NewS3(artifactClient, artifactBucket, ""),
 		Inventory: func(context.Context, int64) (spec.Inventory, error) { return inv, nil },
 	}
 

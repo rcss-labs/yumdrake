@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,6 +24,7 @@ import (
 	"github.com/rcss-labs/yamdrake/internal/engine"
 	"github.com/rcss-labs/yamdrake/internal/health"
 	"github.com/rcss-labs/yamdrake/internal/logs"
+	"github.com/rcss-labs/yamdrake/internal/metrics"
 	"github.com/rcss-labs/yamdrake/internal/notify"
 	"github.com/rcss-labs/yamdrake/internal/queue"
 	"github.com/rcss-labs/yamdrake/internal/secrets"
@@ -34,6 +37,11 @@ import (
 
 // OrchestratorServiceName is the name the orchestrator logs under.
 const OrchestratorServiceName = "yumdrake-orchestrator"
+
+// metricsOutput is where the metrics emitter writes its lines. Standard output
+// is where the service's own JSON log goes too, so CloudWatch Logs gets both
+// from one stream and picks out the lines that carry the "_aws" directive.
+var metricsOutput io.Writer = os.Stdout
 
 // NewOrchestratorService describes the orchestrator for Run: the shared
 // start-up with the schema migration (when cfg.MigrateOnStart is set) and the
@@ -96,7 +104,7 @@ func OrchestratorExtension(cfg config.Orchestrator) func(context.Context, *slog.
 			// Yumdrake's own account and identity, not a connected account's.
 			archive = logs.NewS3Archive(s3.NewFromConfig(awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() }), cfg.LogBucket)
 		case cfg.LogArchiveDir != "":
-			if archive, err = logs.NewDirArchive(cfg.LogArchiveDir); err != nil {
+			if archive, err = logs.NewDirArchive(cfg.LogArchiveDir, cipher); err != nil {
 				return Extension{}, fmt.Errorf("log archive: %w", err)
 			}
 		}
@@ -145,6 +153,14 @@ func OrchestratorExtension(cfg config.Orchestrator) func(context.Context, *slog.
 				log.Info("log archive loop started", "interval", cfg.LogArchiveInterval.String(), "after", cfg.LogArchiveAfter.String())
 				archiveLoop(ctx, archiver, cfg.LogArchiveInterval, log)
 				log.Info("log archive loop stopped")
+			})
+		}
+		if cfg.Metrics == "emf" {
+			emitter := metrics.NewEmitter(pool, metricsOutput, metrics.Namespace, cfg.MetricsDimensions, metrics.Interval, log)
+			background = append(background, func(ctx context.Context) {
+				log.Info("metrics emitter started", "interval", metrics.Interval.String())
+				emitter.Run(ctx)
+				log.Info("metrics emitter stopped")
 			})
 		}
 		return Extension{

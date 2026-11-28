@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +21,17 @@ import (
 
 // Common holds the settings shared by both service binaries.
 type Common struct {
-	DatabaseURL     string
-	ValkeyAddr      string
+	DatabaseURL string
+	ValkeyAddr  string
+	// ValkeyPassword is the Valkey AUTH password (YUMDRAKE_VALKEY_PASSWORD).
+	// Optional; empty means no AUTH is sent.
+	ValkeyPassword Secret
+	// ValkeyTLS connects to Valkey over TLS (YUMDRAKE_VALKEY_TLS, "true" or
+	// "false", default false). ElastiCache with encryption in transit needs it.
+	ValkeyTLS bool
+	// Env is "dev" or "prod" (YUMDRAKE_ENV, default prod). Fake steps and the
+	// public demo key are allowed only in dev.
+	Env             string
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 	StartupTimeout  time.Duration
@@ -69,6 +79,12 @@ type Orchestrator struct {
 	// their CLI tokens to keep working (YUMDRAKE_TOKEN_SSO_MAX_AGE, default 168h,
 	// at least 1h).
 	TokenSSOMaxAge time.Duration
+	// Metrics is "" (off, the default) or "emf": write CloudWatch embedded
+	// metric format lines to standard output every minute
+	// (YUMDRAKE_METRICS). MetricsDimensions are put on every metric
+	// (YUMDRAKE_METRICS_DIMENSIONS, "Name=value,Name=value").
+	Metrics           string
+	MetricsDimensions map[string]string
 
 	SyncSettings
 }
@@ -79,8 +95,9 @@ type Runner struct {
 	HealthAddr string
 	RunnerID   string
 
-	// ArtifactBucket (YUMDRAKE_ARTIFACT_BUCKET, required) holds config copies;
-	// ArtifactKMSKeyID (YUMDRAKE_ARTIFACT_KMS_KEY_ID, optional) selects KMS
+	// ArtifactBucket (YUMDRAKE_ARTIFACT_BUCKET) holds config copies in S3, or
+	// ArtifactDir (YUMDRAKE_ARTIFACT_DIR) holds them as encrypted files;
+	// exactly one of the two is required. ArtifactKMSKeyID (YUMDRAKE_ARTIFACT_KMS_KEY_ID, optional) selects KMS
 	// encryption instead of S3-managed keys.
 	ArtifactBucket   string
 	ArtifactKMSKeyID string
@@ -90,10 +107,15 @@ type Runner struct {
 	// ValkeyKeyPrefix goes in front of the Valkey channels; it must equal the
 	// orchestrator's so that wake-ups reach each other.
 	ValkeyKeyPrefix string
-	// Env is "dev" or "prod". Fake steps are allowed only in dev.
-	Env string
 	// FakeSteps registers the fake step executors instead of real ones.
 	FakeSteps bool
+	// FakeResolve keeps the fake resolve and revalidate steps instead of
+	// replacing them with the real ones (YUMDRAKE_FAKE_RESOLVE; the demo has no
+	// AWS or GitHub). Only with FakeSteps.
+	FakeResolve bool
+	// ArtifactDir is the directory for config copies (YUMDRAKE_ARTIFACT_DIR),
+	// an alternative to ArtifactBucket.
+	ArtifactDir string
 	// Concurrency is how many legs one runner executes at once.
 	Concurrency int
 	// Lease is how long a claimed leg stays with its runner without a
@@ -127,6 +149,15 @@ func (l *loader) err() error {
 	return errors.Join(l.problems...)
 }
 
+// refusePlaceholder fails when a password still has the <placeholder> form of
+// deploy/compose/.env.example, so a forgotten edit cannot run with a public
+// password. The value is never echoed.
+func (l *loader) refusePlaceholder(variable, value string) {
+	if len(value) >= 2 && strings.HasPrefix(value, "<") && strings.HasSuffix(value, ">") {
+		l.fail(variable, "is still the <placeholder> from .env.example; set a generated password")
+	}
+}
+
 func (l *loader) loadCommon() Common {
 	var c Common
 
@@ -142,10 +173,31 @@ func (l *loader) loadCommon() Common {
 		l.fail("YUMDRAKE_VALKEY_ADDR", reason)
 	}
 
+	c.ValkeyPassword = Secret(l.getenv("YUMDRAKE_VALKEY_PASSWORD"))
+	l.refusePlaceholder("YUMDRAKE_VALKEY_PASSWORD", c.ValkeyPassword.Reveal())
+	l.refusePlaceholder("PGPASSWORD", l.getenv("PGPASSWORD"))
+	switch raw := l.valueOr("YUMDRAKE_VALKEY_TLS", "false"); raw {
+	case "true":
+		c.ValkeyTLS = true
+	case "false":
+		c.ValkeyTLS = false
+	default:
+		l.fail("YUMDRAKE_VALKEY_TLS", `must be "true" or "false"`)
+	}
+
+	switch c.Env = l.valueOr("YUMDRAKE_ENV", "prod"); c.Env {
+	case "dev", "prod":
+	default:
+		l.fail("YUMDRAKE_ENV", `must be "dev" or "prod"`)
+	}
+
 	c.LogLevel = l.logLevel("YUMDRAKE_LOG_LEVEL", "info")
 	c.ShutdownTimeout = l.duration("YUMDRAKE_SHUTDOWN_TIMEOUT", "20s")
 	c.StartupTimeout = l.duration("YUMDRAKE_STARTUP_TIMEOUT", "60s")
 	c.SecretSettings = l.loadSecretSettings()
+	if c.LocalSecretKey.Reveal() == mustDecodeDemoKey() && c.Env != "dev" {
+		l.fail("YUMDRAKE_LOCAL_SECRET_KEY", "is the public demo key; it is allowed only with YUMDRAKE_ENV=dev")
+	}
 
 	c.AWS.EndpointURL = l.getenv("YUMDRAKE_AWS_ENDPOINT_URL")
 	if c.AWS.EndpointURL != "" {
@@ -175,6 +227,12 @@ func LoadOrchestrator(getenv func(string) string) (Orchestrator, error) {
 	}
 
 	cfg.PublicURL = l.publicURL("YUMDRAKE_PUBLIC_URL")
+	if cfg.Env == "dev" && cfg.PublicURL != "" {
+		// publicURL already validated and normalised the value.
+		if u, err := url.Parse(cfg.PublicURL); err == nil && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+			l.fail("YUMDRAKE_ENV", "dev is allowed only when YUMDRAKE_PUBLIC_URL is on localhost or 127.0.0.1")
+		}
+	}
 	cfg.ValkeyKeyPrefix = l.keyPrefix()
 	cfg.LogArchiveDir = l.getenv("YUMDRAKE_LOG_ARCHIVE_DIR")
 	if cfg.LogArchiveDir != "" && !filepath.IsAbs(cfg.LogArchiveDir) {
@@ -203,6 +261,12 @@ func LoadOrchestrator(getenv func(string) string) (Orchestrator, error) {
 	if cfg.TokenSSOMaxAge > 0 && cfg.TokenSSOMaxAge < minTokenSSOMaxAge {
 		l.fail("YUMDRAKE_TOKEN_SSO_MAX_AGE", "must be at least 1h")
 	}
+	switch cfg.Metrics = l.getenv("YUMDRAKE_METRICS"); cfg.Metrics {
+	case "", "emf":
+	default:
+		l.fail("YUMDRAKE_METRICS", `must be "" or "emf"`)
+	}
+	cfg.MetricsDimensions = l.metricDimensions("YUMDRAKE_METRICS_DIMENSIONS")
 	cfg.SyncSettings = l.loadSyncSettings()
 
 	if err := l.err(); err != nil {
@@ -229,9 +293,7 @@ func LoadRunner(getenv func(string) string) (Runner, error) {
 	}
 
 	cfg.ArtifactBucket = l.getenv("YUMDRAKE_ARTIFACT_BUCKET")
-	if cfg.ArtifactBucket == "" {
-		l.fail("YUMDRAKE_ARTIFACT_BUCKET", "is required")
-	} else if !bucketNamePattern.MatchString(cfg.ArtifactBucket) || strings.Contains(cfg.ArtifactBucket, "..") {
+	if cfg.ArtifactBucket != "" && (!bucketNamePattern.MatchString(cfg.ArtifactBucket) || strings.Contains(cfg.ArtifactBucket, "..")) {
 		l.fail("YUMDRAKE_ARTIFACT_BUCKET", "must be a valid S3 bucket name (3 to 63 lowercase letters, digits, '-' or '.')")
 	}
 	cfg.ArtifactKMSKeyID = l.getenv("YUMDRAKE_ARTIFACT_KMS_KEY_ID")
@@ -239,11 +301,6 @@ func LoadRunner(getenv func(string) string) (Runner, error) {
 		l.fail("YUMDRAKE_ARTIFACT_KMS_KEY_ID", "must be a KMS key id, key ARN or alias without spaces")
 	}
 	cfg.GitHubAPIURL = l.githubAPIURL()
-	switch cfg.Env = l.valueOr("YUMDRAKE_ENV", "prod"); cfg.Env {
-	case "dev", "prod":
-	default:
-		l.fail("YUMDRAKE_ENV", `must be "dev" or "prod"`)
-	}
 	switch raw := l.valueOr("YUMDRAKE_FAKE_STEPS", "false"); raw {
 	case "true":
 		cfg.FakeSteps = true
@@ -253,6 +310,26 @@ func LoadRunner(getenv func(string) string) (Runner, error) {
 	}
 	if cfg.FakeSteps && cfg.Env != "dev" {
 		l.fail("YUMDRAKE_FAKE_STEPS", `is allowed only with YUMDRAKE_ENV=dev`)
+	}
+	switch raw := l.valueOr("YUMDRAKE_FAKE_RESOLVE", "false"); raw {
+	case "true":
+		cfg.FakeResolve = true
+	case "false":
+	default:
+		l.fail("YUMDRAKE_FAKE_RESOLVE", `must be "true" or "false"`)
+	}
+	if cfg.FakeResolve && !cfg.FakeSteps {
+		l.fail("YUMDRAKE_FAKE_RESOLVE", `needs YUMDRAKE_FAKE_STEPS=true (and so YUMDRAKE_ENV=dev)`)
+	}
+	cfg.ArtifactDir = l.getenv("YUMDRAKE_ARTIFACT_DIR")
+	if cfg.ArtifactDir != "" && !filepath.IsAbs(cfg.ArtifactDir) {
+		l.fail("YUMDRAKE_ARTIFACT_DIR", "must be an absolute path")
+	}
+	switch {
+	case cfg.ArtifactBucket == "" && cfg.ArtifactDir == "":
+		l.fail("YUMDRAKE_ARTIFACT_BUCKET", "or YUMDRAKE_ARTIFACT_DIR is required (exactly one of them)")
+	case cfg.ArtifactBucket != "" && cfg.ArtifactDir != "":
+		l.fail("YUMDRAKE_ARTIFACT_BUCKET", "and YUMDRAKE_ARTIFACT_DIR cannot both be set (exactly one of them)")
 	}
 	cfg.Concurrency = l.positiveInt("YUMDRAKE_RUNNER_CONCURRENCY", "8")
 	cfg.Lease = l.duration("YUMDRAKE_LEASE", "30s")
@@ -293,6 +370,56 @@ func (l *loader) publicURL(variable string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
+}
+
+const maxMetricDimensions = 30
+
+// MetricNames are the metric names the orchestrator emits (internal/metrics
+// cannot be imported here: it would make an import cycle). A dimension may not
+// use one; a test in internal/metrics keeps this list in step with Collect.
+var MetricNames = []string{
+	"QueueDepth", "OldestQueuedLegAge", "ActiveRunners", "ExpiredLeases", "RunsFinished", "RunsFailed",
+	"RunDuration", "SyncAge", "LogPersistenceFailures", "NotificationFailures", "NotificationsPending",
+}
+
+var metricDimensionName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,255}$`)
+
+// metricDimensions reads "Name=value,Name=value" (empty or unset means none).
+// A name must match metricDimensionName and appear once, a value must not be
+// empty or hold a comma (the separator), and there are at most 30 pairs.
+// Messages never echo a value.
+func (l *loader) metricDimensions(variable string) map[string]string {
+	raw := l.getenv(variable)
+	if raw == "" {
+		return nil
+	}
+	pairs := strings.Split(raw, ",")
+	if len(pairs) > maxMetricDimensions {
+		l.fail(variable, fmt.Sprintf("allows at most %d dimensions", maxMetricDimensions))
+		return nil
+	}
+	out := make(map[string]string, len(pairs))
+	for i, pair := range pairs {
+		name, value, found := strings.Cut(pair, "=")
+		switch {
+		case !found || value == "":
+			l.fail(variable, fmt.Sprintf("entry %d must be Name=value with a non-empty value", i+1))
+			return nil
+		case !metricDimensionName.MatchString(name):
+			l.fail(variable, fmt.Sprintf("entry %d: the name must match %s", i+1, metricDimensionName))
+			return nil
+		}
+		if name == "_aws" || slices.Contains(MetricNames, name) {
+			l.fail(variable, fmt.Sprintf("entry %d: the name %q is reserved for the metrics", i+1, name))
+			return nil
+		}
+		if _, dup := out[name]; dup {
+			l.fail(variable, fmt.Sprintf("entry %d: the name %q is given twice", i+1, name))
+			return nil
+		}
+		out[name] = value
+	}
+	return out
 }
 
 func (l *loader) valueOr(variable, fallback string) string {

@@ -61,7 +61,7 @@ type Source interface {
 	ReadFile(ctx context.Context, repo, commit, path string) ([]byte, error)
 }
 
-// ArtifactStore keeps the config copies. *artifacts.Store satisfies it.
+// ArtifactStore keeps the config copies. *artifacts.S3Store satisfies it.
 type ArtifactStore interface {
 	Put(ctx context.Context, runID int64, service, kind, name string, previous bool, data []byte) (key, sha256hex string, err error)
 }

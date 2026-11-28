@@ -867,3 +867,43 @@ func TestMessagesPendingForADayExpire(t *testing.T) {
 		t.Errorf("fresh row %+v, want it still pending", row)
 	}
 }
+
+func TestFailedNotificationGetsFailedAt(t *testing.T) {
+	t.Parallel()
+	f := newSenderFixture(t)
+	refused, expired, delivered := f.runs.newRun(t), f.runs.newRun(t), f.runs.newRun(t)
+	enqueue(t, f.pool, refused, "started", f.clock.now())
+	enqueue(t, f.pool, delivered, "started", f.clock.now())
+	payload, _ := json.Marshal(map[string]string{"text": "old"})
+	if err := store.EnqueueNotification(context.Background(), f.pool, store.Notification{
+		RunID: expired, Kind: "started", Channel: "#deploys", Payload: payload,
+		CreatedAt: f.clock.now().Add(-25 * time.Hour), NextAttemptAt: f.clock.now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.slack.set(func(p post) (int, string, string) {
+		if p.Text == fmt.Sprintf("started@%d", refused) {
+			return 200, "", `{"ok":false,"error":"channel_not_found"}`
+		}
+		return 200, "", `{"ok":true}`
+	})
+	f.deliver(t)
+
+	failedAt := func(run int64) (state string, at *time.Time) {
+		t.Helper()
+		err := f.pool.QueryRow(context.Background(), `SELECT state, failed_at FROM notifications WHERE run_id = $1`, run).Scan(&state, &at)
+		if err != nil {
+			t.Fatalf("read failed_at: %v", err)
+		}
+		return state, at
+	}
+	for name, run := range map[string]int64{"refused by Slack": refused, "expired": expired} {
+		state, at := failedAt(run)
+		if state != "failed" || at == nil || at.Sub(f.clock.now()).Abs() > time.Minute {
+			t.Errorf("%s: state %q, failed_at %v; want failed with failed_at at about %v", name, state, at, f.clock.now())
+		}
+	}
+	if state, at := failedAt(delivered); state != "sent" || at != nil {
+		t.Errorf("delivered: state %q, failed_at %v; want sent with no failed_at", state, at)
+	}
+}

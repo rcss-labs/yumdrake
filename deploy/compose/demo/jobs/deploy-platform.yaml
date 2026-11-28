@@ -1,0 +1,48 @@
+apiVersion: yumdrake/v1
+kind: Job
+job: deploy-platform
+title: "Deploy the whole platform"
+
+environment:
+  labels: [dev, preprod, prod]
+
+groups:
+  backends:
+    label: Backend services
+    services: [backend-api, orders, payments]
+  workers:
+    label: Workers
+    services: [notifications]
+  frontend:
+    label: Web
+    services: [web-frontend]
+
+approval:
+  when:
+    labels: [prod]
+  expires: 24h
+
+steps:
+  - name: config-backends
+    use: copy-config
+    group: backends
+  - name: roll-backends
+    use: ecs-deploy
+    group: backends
+    max_parallel: 2
+    timeout: 15m
+    needs: [config-backends]
+  - name: config-workers
+    use: copy-config
+    group: workers
+  - name: roll-workers
+    use: ecs-deploy
+    group: workers
+    needs: [config-workers, roll-backends]
+  - name: config-frontend
+    use: copy-config
+    group: frontend
+  - name: roll-frontend
+    use: ecs-deploy
+    group: frontend
+    needs: [config-frontend, roll-backends]

@@ -5,6 +5,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/rcss-labs/yamdrake/internal/testutil/testdb"
 )
@@ -320,5 +323,47 @@ func TestWaitOpenBoundsASingleHangingAttempt(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("WaitOpen still hanging after 8s with maxWait 2s: a single attempt is not bounded")
+	}
+}
+
+// Characterization test: the Compose setup hands the database password to the
+// services through PGPASSWORD instead of the URL, which relies on pgx reading
+// it. Not parallel because it uses t.Setenv.
+func TestOpenHonoursPGPASSWORD(t *testing.T) {
+	withPassword := testdb.New(t)
+	parsed, err := url.Parse(withPassword)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || password == "" {
+		t.Fatal("the test database URL carries no password, so PGPASSWORD cannot be proved to supply it")
+	}
+	parsed.User = url.User(parsed.User.Username())
+	withoutPassword := parsed.String()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	t.Setenv("PGPASSWORD", password)
+	pool, err := Open(ctx, withoutPassword)
+	if err != nil {
+		t.Fatalf("Open with PGPASSWORD set: %v", err)
+	}
+	var one int
+	if err := pool.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil || one != 1 {
+		t.Errorf("SELECT 1 = %d, %v", one, err)
+	}
+	pool.Close()
+
+	t.Setenv("PGPASSWORD", password+"-wrong")
+	pool, err = Open(ctx, withoutPassword)
+	if err == nil {
+		pool.Close()
+		t.Fatal("Open with a wrong PGPASSWORD succeeded; the server does not require the password")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "28P01" {
+		t.Errorf("Open with a wrong PGPASSWORD: error = %v, want an authentication failure (28P01)", err)
 	}
 }

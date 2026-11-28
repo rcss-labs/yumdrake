@@ -57,8 +57,8 @@ const attempts = 4
 
 const defaultRetryBase = 500 * time.Millisecond
 
-// ArtifactReader reads a stored copy and checks its SHA-256. *artifacts.Store
-// satisfies it. Deps.Artifacts must also implement it (as *artifacts.Store
+// ArtifactReader reads a stored copy and checks its SHA-256. *artifacts.S3Store
+// satisfies it. Deps.Artifacts must also implement it (as *artifacts.S3Store
 // does); an executor built without one fails every run that has stored copies.
 type ArtifactReader interface {
 	Get(ctx context.Context, key, wantSHA256 string) ([]byte, error)

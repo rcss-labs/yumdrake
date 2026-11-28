@@ -6,6 +6,28 @@ DevOps describe jobs and inventory in YAML. QA, developers and DevOps run those 
 
 See the [design spec](docs/superpowers/specs/2026-11-27-yumdrake-design.md).
 
+## Try it
+
+With Docker and Compose installed, from the repository root:
+
+```sh
+make demo        # builds and starts the demo (the first build takes a few minutes)
+```
+
+Open http://localhost:18280 and sign in as one of these:
+
+| Person | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@demo.yumdrake.test` | `demo-admin-password` |
+| Deployer | `deployer@demo.yumdrake.test` | `demo-deployer-password` |
+| Viewer | `viewer@demo.yumdrake.test` | `demo-viewer-password` |
+
+```sh
+make demo-down   # stop it and delete its data
+```
+
+The demo runs on fake steps that change nothing, and it refuses to run anywhere but localhost. To run Yumdrake for real on one host, see [deploy/compose/README.md](deploy/compose/README.md); for ECS, see [deploy/terraform/example/README.md](deploy/terraform/example/README.md).
+
 ## Prerequisites
 
 - Go 1.26
@@ -263,6 +285,8 @@ Every variable starts with `YUMDRAKE_`. Secrets are never logged; a database URL
 | --- | --- | --- | --- |
 | `YUMDRAKE_DATABASE_URL` | orchestrator, runner | none (required) | Must use the `postgres://` or `postgresql://` scheme and include a host. The query string must parse. |
 | `YUMDRAKE_VALKEY_ADDR` | orchestrator, runner | none (required) | `host:port`, with a port from 1 to 65535. |
+| `YUMDRAKE_VALKEY_PASSWORD` | orchestrator, runner | empty | Valkey password (AUTH for the default user). Empty sends no AUTH. Never printed or logged. |
+| `YUMDRAKE_VALKEY_TLS` | orchestrator, runner | `false` | `true` or `false`. `true` connects to Valkey over TLS, verified against the system roots (needed for ElastiCache with encryption in transit). |
 | `YUMDRAKE_LOG_LEVEL` | orchestrator, runner | `info` | One of `debug`, `info`, `warn`, `error`. |
 | `YUMDRAKE_SHUTDOWN_TIMEOUT` | orchestrator, runner | `20s` | Go duration greater than zero. |
 | `YUMDRAKE_STARTUP_TIMEOUT` | orchestrator, runner | `60s` | Go duration greater than zero. Bounds the database wait (both) and the schema wait (runner). |
@@ -271,7 +295,7 @@ Every variable starts with `YUMDRAKE_`. Secrets are never logged; a database URL
 | `YUMDRAKE_MIGRATE_ON_START` | orchestrator | `true` | Must be `true` or `false`. |
 | `YUMDRAKE_HEALTH_ADDR` | runner | `127.0.0.1:8081` | `host:port`, with a port from 1 to 65535. Also read by `healthcheck`. |
 | `YUMDRAKE_RUNNER_ID` | runner | the host name | Identifies the runner in its logs. If unset and the host name cannot be determined, startup fails. |
-| `YUMDRAKE_ARTIFACT_BUCKET` | runner | none, required | S3 bucket (3 to 63 lowercase letters, digits, `-`, `.`) that holds encrypted copies of the config files a run touches, under `manifests/<run>/<service>/<kind>/`. |
+| `YUMDRAKE_ARTIFACT_BUCKET` | runner | empty | S3 bucket (3 to 63 lowercase letters, digits, `-`, `.`) that holds encrypted copies of the config files a run touches, under `manifests/<run>/<service>/<kind>/`. Exactly one of this and `YUMDRAKE_ARTIFACT_DIR` must be set. |
 | `YUMDRAKE_ARTIFACT_KMS_KEY_ID` | runner | empty (S3-managed encryption) | KMS key id, ARN or alias used to encrypt those copies instead of S3-managed keys. |
 | `YUMDRAKE_SECRETS_MODE` | orchestrator, runner | `local` | `local` or `kms`. With `kms` the secrets are encrypted by an AWS KMS key (`YUMDRAKE_KMS_KEY_ID`) using the default AWS credential chain and region (`AWS_REGION`); the purpose of each secret is the KMS encryption context. Any other value is a config error. |
 | `YUMDRAKE_LOCAL_SECRET_KEY` | orchestrator, runner | none (required when the mode is `local`) | Base64 of exactly 32 bytes (for example `openssl rand -base64 32`). Encrypts stored GitHub credentials. For development and tests only; never printed. |
@@ -285,14 +309,18 @@ Every variable starts with `YUMDRAKE_`. Secrets are never logged; a database URL
 | `YUMDRAKE_SWEEP_INTERVAL` | orchestrator | `2s` | Go duration greater than zero. How often the run engine's fallback timer gives expired leases to another runner, expires waiting runs and advances every active run. Wake-ups through Valkey make runs move sooner; the timer alone is enough when Valkey is down. |
 | `YUMDRAKE_LIMIT_PER_ENVIRONMENT` | orchestrator | `10` | Positive integer. At most this many legs of other runs run at once in one environment. A soft limit: orchestrators advancing two runs at the same moment may overshoot it briefly. |
 | `YUMDRAKE_LIMIT_PER_ACCOUNT` | orchestrator | `20` | Positive integer. The same limit for one AWS account. |
-| `YUMDRAKE_LOG_ARCHIVE_DIR` | orchestrator | empty (no archiving) | Absolute path of a directory. When set, the logs of legs settled longer than `YUMDRAKE_LOG_ARCHIVE_AFTER` are moved there from PostgreSQL and are still served by the API. |
+| `YUMDRAKE_LOG_ARCHIVE_DIR` | orchestrator | empty (no archiving) | Absolute path of a directory. When set, the logs of legs settled longer than `YUMDRAKE_LOG_ARCHIVE_AFTER` are moved there from PostgreSQL and are still served by the API. The archive files are encrypted with `YUMDRAKE_LOCAL_SECRET_KEY`. |
 | `YUMDRAKE_LOG_BUCKET` | orchestrator | empty (no S3 archive) | S3 bucket (3 to 63 lowercase letters, digits, `-`, `.`) that settled legs' logs are archived to, under `runs/<run>/legs/<leg>.ndjson.gz`, encrypted with S3-managed keys. Uses Yumdrake's own AWS identity. Replaces `YUMDRAKE_LOG_ARCHIVE_DIR`: setting both is a configuration error. |
 | `YUMDRAKE_LOG_ARCHIVE_INTERVAL` | orchestrator | `1m` | Go duration greater than zero. How often settled legs are archived. Used only with `YUMDRAKE_LOG_ARCHIVE_DIR` or `YUMDRAKE_LOG_BUCKET`. |
 | `YUMDRAKE_LOG_ARCHIVE_AFTER` | orchestrator | `1h` | Go duration. How long a leg must have been settled before its log is archived. Used only with `YUMDRAKE_LOG_ARCHIVE_DIR` or `YUMDRAKE_LOG_BUCKET`. |
 | `YUMDRAKE_SLACK_API_URL` | orchestrator | `https://slack.com/api` | An `http://` or `https://` URL with a host. The Slack Web API that notifications are posted to. Overridden in tests. |
 | `YUMDRAKE_NOTIFY_INTERVAL` | orchestrator | `5s` | Go duration greater than zero. How often the sender looks for notifications that are due. |
-| `YUMDRAKE_ENV` | runner | `prod` | `dev` or `prod`. Fake steps are allowed only with `dev`. |
+| `YUMDRAKE_ENV` | orchestrator, runner | `prod` | `dev` or `prod`. Fake steps and the public demo key of `YUMDRAKE_LOCAL_SECRET_KEY` are allowed only with `dev`, and `dev` is accepted only when `YUMDRAKE_PUBLIC_URL` is on `localhost` or `127.0.0.1` (the orchestrator refuses to start otherwise). |
+| `YUMDRAKE_ARTIFACT_DIR` | runner | empty | Absolute path of the directory for config copies (encrypted, deleted after 30 days). Instead of `YUMDRAKE_ARTIFACT_BUCKET`; setting both is a configuration error. Compose sets it to the `artifacts` volume. |
+| `YUMDRAKE_METRICS` | orchestrator | empty (off) | `emf` writes CloudWatch embedded-metric-format lines to standard output every minute. Any other non-empty value is a config error. |
+| `YUMDRAKE_METRICS_DIMENSIONS` | orchestrator | empty | `Name=value,Name=value`: dimensions put on every metric (at most the number the config allows). Used with `YUMDRAKE_METRICS`. |
 | `YUMDRAKE_FAKE_STEPS` | runner | `false` | `true` or `false`. When `true` (only with `YUMDRAKE_ENV=dev`; the runner refuses to start otherwise) the runner executes pretend steps that change nothing real. See [Trying a run with fake steps](#trying-a-run-with-fake-steps). |
+| `YUMDRAKE_FAKE_RESOLVE` | runner | `false` | `true` or `false`. Keeps the fake resolve and revalidate steps instead of the real ones; only with `YUMDRAKE_FAKE_STEPS=true`. The Compose demo sets it because it has no AWS or GitHub. |
 | `YUMDRAKE_RUNNER_CONCURRENCY` | runner | `8` | Positive integer. How many legs one runner executes at once. |
 | `YUMDRAKE_LEASE` | runner | `30s` | Go duration. How long a claimed leg belongs to a runner without a heartbeat. After that another runner may take it (at most 5 times, then the leg becomes `unknown`). |
 | `YUMDRAKE_HEARTBEAT` | runner | `10s` | Go duration; must be shorter than `YUMDRAKE_LEASE`. How often the runner renews the leases of its legs. |

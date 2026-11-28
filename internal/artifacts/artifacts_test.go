@@ -36,7 +36,7 @@ func TestPutRequestsServerSideEncryption(t *testing.T) {
 				Credentials:  credentials.NewStaticCredentialsProvider("a", "b", ""),
 				BaseEndpoint: aws.String("http://example.invalid"),
 			})
-			if _, _, err := artifacts.New(client, "bkt", tc.kmsKey).Put(context.Background(), 1, "svc", "values", "a.yaml", false, []byte("x")); err != nil {
+			if _, _, err := artifacts.NewS3(client, "bkt", tc.kmsKey).Put(context.Background(), 1, "svc", "values", "a.yaml", false, []byte("x")); err != nil {
 				t.Fatalf("Put: %v", err)
 			}
 			if got := rec.header.Get("X-Amz-Server-Side-Encryption"); got != tc.wantAlgo {
@@ -63,13 +63,13 @@ func (b *bodyClient) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(b.body()), Header: h, ContentLength: b.contentLength}, nil
 }
 
-func stubStore(hc aws.HTTPClient) *artifacts.Store {
+func stubStore(hc aws.HTTPClient) *artifacts.S3Store {
 	client := s3.New(s3.Options{
 		Region: "us-east-1", HTTPClient: hc, UsePathStyle: true,
 		Credentials:  credentials.NewStaticCredentialsProvider("a", "b", ""),
 		BaseEndpoint: aws.String("http://example.invalid"),
 	})
-	return artifacts.New(client, "bkt", "")
+	return artifacts.NewS3(client, "bkt", "")
 }
 
 func TestGetRefusesObjectsOverTheLimit(t *testing.T) {

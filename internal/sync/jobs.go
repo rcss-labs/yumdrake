@@ -258,6 +258,10 @@ func (e *Engine) recordSyncError(ctx context.Context, what string, err error, sa
 	if serr := save(message, e.now()); serr != nil {
 		e.log.Warn("could not record sync error", "error", serr.Error())
 	}
+	// A system event counts the failure; failing to record it changes nothing.
+	if serr := store.RecordEvent(ctx, e.pool, "sync_failed", e.now()); serr != nil {
+		e.log.Warn("could not record sync failure event", "error", serr.Error())
+	}
 }
 
 const maxSyncErrorLength = 500

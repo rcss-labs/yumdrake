@@ -19,6 +19,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/rcss-labs/yamdrake/internal/secrets"
 )
 
 // Archive stores the compressed log of settled legs.
@@ -27,21 +29,36 @@ type Archive interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 }
 
-type dirArchive struct{ root string }
+// logArchivePurpose binds every stored archive to this use in the cipher.
+const logArchivePurpose = "log-archive"
 
-// NewDirArchive stores archives as files under dir (created when missing).
-func NewDirArchive(dir string) (Archive, error) {
+// archivePurpose is the purpose (the cipher's authenticated data) of one
+// archive: the use plus its key, so a file copied over another one's path does
+// not decrypt.
+func archivePurpose(key string) string { return logArchivePurpose + ":" + key }
+
+type dirArchive struct {
+	root   string
+	cipher secrets.Cipher
+}
+
+// NewDirArchive stores encrypted archives as files under dir (created when
+// missing). The cipher is required: archived logs are never written in clear.
+func NewDirArchive(dir string, c secrets.Cipher) (Archive, error) {
 	if dir == "" {
 		return nil, errors.New("log archive: directory is empty")
+	}
+	if c == nil {
+		return nil, errors.New("log archive: cipher is nil")
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("log archive: %w", err)
 	}
-	if err := os.MkdirAll(abs, 0o750); err != nil {
+	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("log archive: create %s: %w", abs, err)
 	}
-	return &dirArchive{root: abs}, nil
+	return &dirArchive{root: abs, cipher: c}, nil
 }
 
 // file maps a key to a path inside the root and refuses keys that escape it.
@@ -53,14 +70,19 @@ func (d *dirArchive) file(key string) (string, error) {
 	return filepath.Join(d.root, filepath.FromSlash(clean)), nil
 }
 
-// Put writes through a temporary file and a rename, so a reader never sees a
-// partial archive and a repeated Put of the same key replaces it.
-func (d *dirArchive) Put(_ context.Context, key string, data []byte) error {
+// Put encrypts the archive and writes it through a temporary file and a rename,
+// so a reader never sees a partial archive and a repeated Put of the same key
+// replaces it.
+func (d *dirArchive) Put(ctx context.Context, key string, data []byte) error {
 	target, err := d.file(key)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+	sealed, err := d.cipher.Encrypt(ctx, archivePurpose(key), data)
+	if err != nil {
+		return fmt.Errorf("log archive: encrypt %s: %w", key, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return fmt.Errorf("log archive: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".put-*")
@@ -68,7 +90,7 @@ func (d *dirArchive) Put(_ context.Context, key string, data []byte) error {
 		return fmt.Errorf("log archive: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after a successful rename
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := tmp.Write(sealed); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("log archive: write: %w", err)
 	}
@@ -85,14 +107,19 @@ func (d *dirArchive) Put(_ context.Context, key string, data []byte) error {
 	return nil
 }
 
-func (d *dirArchive) Get(_ context.Context, key string) ([]byte, error) {
+func (d *dirArchive) Get(ctx context.Context, key string) ([]byte, error) {
 	target, err := d.file(key)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(target) //nolint:gosec // target comes from file(), which confines keys to the archive root
+	sealed, err := os.ReadFile(target) //nolint:gosec // target comes from file(), which confines keys to the archive root
 	if err != nil {
 		return nil, fmt.Errorf("log archive: read %s: %w", key, err)
+	}
+	data, err := d.cipher.Decrypt(ctx, archivePurpose(key), sealed)
+	if err != nil {
+		// The message carries the key only, never the stored bytes.
+		return nil, fmt.Errorf("log archive: cannot decrypt %s", key)
 	}
 	return data, nil
 }

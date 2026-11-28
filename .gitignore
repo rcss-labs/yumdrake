@@ -13,3 +13,9 @@
 *.tfstate.*
 terraform.tfvars
 *.auto.tfvars
+
+# Production Compose settings: secrets live here, never commit it.
+/deploy/compose/.env
+# Backups hold password hashes and encrypted secrets; keep them outside the checkout.
+/deploy/compose/*.dump
+/deploy/compose/yumdrake-*.tar.gz

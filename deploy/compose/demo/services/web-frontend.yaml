@@ -1,0 +1,23 @@
+apiVersion: yumdrake/v1
+kind: Service
+name: web-frontend
+versions:
+  pattern: '^v?\d+\.\d+\.\d+$'
+  sort: semver
+  limit: 50
+environments:
+  dev:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/dev/web-frontend
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/web-frontend
+  qa:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/qa/web-frontend
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/web-frontend
+  staging:
+    ecs_service: arn:aws:ecs:eu-central-1:111111111111:service/staging/web-frontend
+    ecr_repository: 111111111111.dkr.ecr.eu-central-1.amazonaws.com/web-frontend
+  preprod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/preprod/web-frontend
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/web-frontend
+  prod:
+    ecs_service: arn:aws:ecs:eu-central-1:222222222222:service/prod/web-frontend
+    ecr_repository: 222222222222.dkr.ecr.eu-central-1.amazonaws.com/web-frontend

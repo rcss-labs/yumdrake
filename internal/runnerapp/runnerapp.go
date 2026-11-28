@@ -39,7 +39,10 @@ func RegisterExecutors(ctx context.Context, log *slog.Logger, cfg config.Runner,
 	if err != nil {
 		return err
 	}
-	deps := resolveDeps(cfg, pool, identity, log)
+	deps, err := resolveDeps(cfg, pool, identity, log)
+	if err != nil {
+		return err
+	}
 	r.Register("resolve", resolve.New(deps))
 	r.Register("revalidate", revalidate.New(deps))
 	return nil
@@ -82,8 +85,11 @@ func newIdentity(ctx context.Context, log *slog.Logger, cfg config.Runner, pool 
 // snapshot (not the active one), uses the deployment credentials of the run's
 // account for ECS, ECR and S3, GitHub through the stored connections, and
 // writes config copies to the artifact bucket with the runner's own identity.
-func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.Logger) resolve.Deps {
-	artifactClient := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.Logger) (resolve.Deps, error) {
+	copies, err := artifactStore(cfg, id)
+	if err != nil {
+		return resolve.Deps{}, err
+	}
 	githubClient := app.GitHubClients(pool, id.cipher, cfg.GitHubAPIURL, log)
 	return resolve.Deps{
 		AWS: id.credentials.For,
@@ -94,7 +100,7 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			}
 			return client, nil
 		},
-		Artifacts: artifacts.New(artifactClient, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID),
+		Artifacts: copies,
 		Inventory: func(ctx context.Context, snapshotID int64) (spec.Inventory, error) {
 			snapshot, err := store.SnapshotByID(ctx, pool, snapshotID)
 			if err != nil {
@@ -107,5 +113,16 @@ func resolveDeps(cfg config.Runner, pool *pgxpool.Pool, id identity, log *slog.L
 			return inventory, nil
 		},
 		Options: cfg.AWS,
+	}, nil
+}
+
+// artifactStore builds the store of config copies: the S3 bucket with the
+// runner's own identity, or encrypted files in the directory. The
+// configuration requires exactly one of the two.
+func artifactStore(cfg config.Runner, id identity) (artifacts.Store, error) {
+	if cfg.ArtifactDir != "" {
+		return artifacts.NewDir(cfg.ArtifactDir, id.cipher)
 	}
+	client := s3.NewFromConfig(id.awsConfig, func(o *s3.Options) { o.UsePathStyle = cfg.AWS.UsePathStyleS3() })
+	return artifacts.NewS3(client, cfg.ArtifactBucket, cfg.ArtifactKMSKeyID), nil
 }

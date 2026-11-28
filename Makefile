@@ -10,7 +10,7 @@ BINARY_PACKAGES := orchestrator runner
 # Compose builds read VERSION and COMMIT from the environment (see compose.yaml).
 export VERSION COMMIT
 
-.PHONY: help build lint test dev-up dev-down test-integration test-floci floci-clean test-e2e images smoke tf-check web-install web-lint web-test web-build web-e2e
+.PHONY: help build lint test dev-up dev-down test-integration test-floci floci-clean test-e2e images smoke compose-check demo demo-down demo-check tf-check web-install web-lint web-test web-build web-e2e
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -103,6 +103,22 @@ tf-check: ## Check the Terraform example: fmt and validate only, never plan or a
 
 smoke: ## Build and start the app profile in Compose and check it is healthy
 	./scripts/smoke.sh
+
+compose-check: ## Run the production Compose setup (deploy/compose) for real: sign-in, restart, HTTPS front
+	./scripts/compose-check.sh
+
+# The demo runs under its own Compose project, so it never touches the dev stack (project yumdrake).
+DEMO_COMPOSE := docker compose -p yumdrake-demo --env-file deploy/compose/demo/demo.env -f deploy/compose/compose.yaml -f deploy/compose/compose.demo.yaml
+
+demo: ## Start the demo (fake steps, sample data) on http://localhost:18280 and print the sign-ins
+	$(DEMO_COMPOSE) up -d --build --wait
+	@$(DEMO_COMPOSE) logs --no-log-prefix demo | grep -A 7 'Yumdrake demo is ready' | tail -n 8
+
+demo-down: ## Stop the demo and delete its data (project yumdrake-demo only)
+	$(DEMO_COMPOSE) down -v --remove-orphans
+
+demo-check: ## Run the demo for real: sign-ins, permissions and a fake deployment through the API and CLI
+	./scripts/demo-check.sh
 
 web-install: ## Install the web application's dependencies from the lockfile
 	npm --prefix web ci

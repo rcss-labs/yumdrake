@@ -100,7 +100,7 @@ func TestResolveAgainstFloci(t *testing.T) {
 		},
 		Options:   awsx.Options{EndpointURL: w.Endpoint},
 		GitHub:    func(context.Context, string) (resolve.Source, error) { return ghClient, nil },
-		Artifacts: artifacts.New(artifactClient, artifactBucket, ""),
+		Artifacts: artifacts.NewS3(artifactClient, artifactBucket, ""),
 		Inventory: func(context.Context, int64) (spec.Inventory, error) { return inv, nil },
 	}
 

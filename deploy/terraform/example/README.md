@@ -75,18 +75,19 @@ Each is marked in a comment as "read from plan N onward". Older versions ignore
 them. They are: `YUMDRAKE_ENV` and `YUMDRAKE_RUNNER_CONCURRENCY` (plan 4);
 `YUMDRAKE_SECRETS_MODE=kms`, `YUMDRAKE_KMS_KEY_ID`, `YUMDRAKE_AWS_ENDPOINT_URL`
 (optional), `YUMDRAKE_ARTIFACT_BUCKET`, `YUMDRAKE_ARTIFACT_KMS_KEY_ID` and
-`YUMDRAKE_LOG_BUCKET` (plan 5); `YUMDRAKE_METRICS` (plan 11, task 4).
+`YUMDRAKE_LOG_BUCKET` (plan 5); `YUMDRAKE_METRICS` (plan 11, task 4); `YUMDRAKE_VALKEY_TLS` (plan 11, task 7).
 Until the version you run reads them, the services refuse to start in `kms` mode
 or do not emit metrics, so match `image_version` to the plan you have.
 
 ## Things to check against the version you run
 
 - **Valkey and TLS.** Encryption in transit is on, so the client must use TLS.
-  The application's Valkey client did not read any TLS setting when this example
-  was written. Confirm it does, or add the setting, before you rely on this.
+  `ecs.tf` sets `YUMDRAKE_VALKEY_TLS=true` for both services; the application
+  reads it from plan 11 onward (an older version ignores it and cannot reach the
+  cache).
 - **Database password.** The database URL carries no password. The task gets
   `PGPASSWORD` from the Secrets Manager secret, which the PostgreSQL driver reads
-  when the URL has none. Confirm your version's driver does. The URL uses
+  when the URL has none (the application tests this). The URL uses
   `sslmode=require`; use `verify-full` if you add the RDS certificate bundle to
   the image.
 - **Encryption purposes.** The purposes in `locals.tf` (`aws-discovery`,

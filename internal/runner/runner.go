@@ -90,6 +90,7 @@ type Runner struct {
 	shutdown    time.Duration
 	log         *slog.Logger
 	onSettled   func(runID int64)
+	registry    *registry // nil: the runner does not report itself
 
 	mu        sync.Mutex
 	executors map[string]Executor
@@ -152,6 +153,19 @@ func (r *Runner) Run(ctx context.Context, wake <-chan struct{}) error {
 	slotFreed := make(chan struct{}, 1)
 	ticker := time.NewTicker(r.poll)
 	defer ticker.Stop()
+
+	if r.registry != nil {
+		// The beat outlives ctx until the legs have drained, so the registry
+		// shows the runner busy while it finishes them; the last write says idle.
+		beatCtx, stopBeat := context.WithCancel(context.WithoutCancel(ctx))
+		beatDone := make(chan struct{})
+		go func() { defer close(beatDone); r.beat(beatCtx) }()
+		defer func() {
+			stopBeat()
+			<-beatDone
+			r.report(context.WithoutCancel(ctx), r.busyNow())
+		}()
+	}
 
 	r.log.Info("runner started", "runner_id", r.id, "concurrency", r.concurrency)
 	for {

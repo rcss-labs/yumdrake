@@ -422,15 +422,20 @@ func TestHeartbeatKeepsLeaseDuringLongLeg(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	leg := h.addLeg("billing")
-	// A real clock and a short lease: the leg below outlives three leases.
-	const lease = 300 * time.Millisecond
+	// A real clock and a short lease: the leg below outlives three leases. The
+	// lease is long enough, and the heartbeat short enough (lease/7), that a
+	// single stalled database call or scheduler pause of a second under load
+	// does not let the lease lapse; a stall of 730 ms was measured under load.
+	const lease = 1400 * time.Millisecond
+	const heartbeat = 200 * time.Millisecond
+	const legDuration = 3*lease + 200*time.Millisecond
 	q := queue.New(h.pool, lease, time.Now)
 
 	var calls atomic.Int32
-	rr := h.startRunner(q, runnerOptions{heartbeat: 50 * time.Millisecond, executors: map[string]Executor{
+	rr := h.startRunner(q, runnerOptions{heartbeat: heartbeat, executors: map[string]Executor{
 		"ecs-deploy": execFunc(func(context.Context, Env, queue.Claimed) queue.Outcome {
 			calls.Add(1)
-			time.Sleep(4 * lease)
+			time.Sleep(legDuration)
 			return succeed(`{}`)
 		}),
 	}})

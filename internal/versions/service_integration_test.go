@@ -24,7 +24,7 @@ func openTestValkey(t *testing.T) valkey.Client {
 	if addr == "" {
 		t.Fatal("YUMDRAKE_TEST_VALKEY_ADDR must be set when running integration tests")
 	}
-	client, err := cache.Open(addr)
+	client, err := cache.Open(cache.Options{Addr: addr})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestForJobCachesForSixtySecondsAndWorksWithoutValkey(t *testing.T) {
 	}
 
 	// With Valkey gone the list still works, uncached.
-	dead, err := cache.Open("127.0.0.1:1")
+	dead, err := cache.Open(cache.Options{Addr: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}

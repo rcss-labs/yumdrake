@@ -138,7 +138,7 @@ func (s *stubAWS) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(
 }
 
 // stubArtifacts serves the manifest's stored copies and checks hashes like
-// *artifacts.Store does. It records every key asked for.
+// *artifacts.S3Store does. It records every key asked for.
 type stubArtifacts struct {
 	mu    sync.Mutex
 	items map[string][]byte
@@ -526,5 +526,5 @@ func contains(list []string, want string) bool {
 	return false
 }
 
-// *artifacts.Store must satisfy the reader the executor looks for.
-var _ revalidate.ArtifactReader = (*artifacts.Store)(nil)
+// *artifacts.S3Store must satisfy the reader the executor looks for.
+var _ revalidate.ArtifactReader = (*artifacts.S3Store)(nil)

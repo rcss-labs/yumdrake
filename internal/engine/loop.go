@@ -68,6 +68,7 @@ func (e *Engine) advanceOrLog(ctx context.Context, runID int64) {
 func (e *Engine) sweepTick(ctx context.Context, q *queue.Queue) {
 	e.guard("sweeping leases", 0, func() { e.sweepLeases(ctx, q) })
 	e.guard("expiring approvals", 0, func() { e.expireDueApprovals(ctx) })
+	e.guard("pruning runners and events", 0, func() { e.pruneSystemRecords(ctx) })
 	var ids []int64
 	e.guard("listing active runs", 0, func() { ids = e.activeRunIDs(ctx) })
 	for _, id := range ids {
@@ -92,6 +93,36 @@ func (e *Engine) sweepLeases(ctx context.Context, q *queue.Queue) {
 		case requeued > 0 || unknown > 0:
 			e.log.Warn("swept expired leases", "requeued", requeued, "unknown", unknown)
 		}
+	}
+}
+
+const (
+	// systemRecordsKeep is how long runner rows and system events are kept.
+	systemRecordsKeep = 7 * 24 * time.Hour
+	// pruneEvery is the least time between two prunes.
+	pruneEvery = time.Hour
+)
+
+// pruneSystemRecords deletes runner rows not seen, and system events recorded,
+// for systemRecordsKeep, at most once an hour. A failure is logged and the next
+// attempt waits for the hour too: pruning is housekeeping, not urgent.
+func (e *Engine) pruneSystemRecords(ctx context.Context) {
+	now := e.now()
+	if !e.lastPruned.IsZero() && now.Sub(e.lastPruned) < pruneEvery {
+		return
+	}
+	e.lastPruned = now
+	cutoff := now.Add(-systemRecordsKeep)
+	runners, err := store.PruneRunners(ctx, e.db, cutoff)
+	if err != nil && ctx.Err() == nil {
+		e.log.Error("could not prune old runner rows", "error", err.Error())
+	}
+	events, err := store.PruneEvents(ctx, e.db, cutoff)
+	if err != nil && ctx.Err() == nil {
+		e.log.Error("could not prune old system events", "error", err.Error())
+	}
+	if runners > 0 || events > 0 {
+		e.log.Info("pruned old runner rows and system events", "runners", runners, "events", events)
 	}
 }
 
